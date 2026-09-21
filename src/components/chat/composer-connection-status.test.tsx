@@ -27,6 +27,7 @@ const fake = vi.hoisted(() => {
     // `getConnection` must return a stable reference for useSyncExternalStore.
     store: {
       getConnection: () => state.conn,
+      getConnectPending: () => undefined,
       getActiveKey: () => null,
       subscribeKey: () => () => {},
       subscribeActiveKey: () => () => {},

@@ -5,10 +5,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const call = vi.fn()
 // Capture the provider's app_update_state handler so tests can push live
 // lifecycle transitions.
+//
+// Route by event name, exactly as the real transport does. A double that
+// captured every subscription into this one slot would hand `liveHandler` to
+// whichever descendant of this page happened to subscribe LAST — the page
+// embeds other sections, and one of them listening for its own events would
+// silently take over the lifecycle handle. The push below would then land on
+// a stranger, the update state would never advance, and the failure would
+// surface as an unrelated assertion about the UI.
 let liveHandler: ((s: unknown) => void) | null = null
 const subscribe = vi.fn(
-  async (_event: string, handler: (s: unknown) => void) => {
-    liveHandler = handler
+  async (event: string, handler: (s: unknown) => void) => {
+    if (event === "app_update_state") liveHandler = handler
     return () => {}
   }
 )

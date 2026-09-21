@@ -438,6 +438,17 @@ pub enum AcpEvent {
         /// (resolved against the option's own value list), not raw ids.
         requested: String,
         actual: String,
+        /// The same two, as the RAW value ids.
+        ///
+        /// Carried beside the labels because a client that localises an agent's
+        /// hardcoded vocabulary (see `lib/agent-label-vocabulary.ts`) keys on
+        /// the id, and the labels above have already been resolved away from
+        /// it. It cannot recover them by matching the label back against the
+        /// live option list either: this event is emitted BEFORE the
+        /// `SessionConfigOptions` carrying the value the agent adopted, so that
+        /// list is still the pre-update one.
+        requested_value: String,
+        actual_value: String,
     },
     /// Initial selector payloads (modes/config options) have been emitted
     SelectorsReady,
@@ -920,6 +931,17 @@ pub struct SessionConfigOptionInfo {
     pub description: Option<String>,
     pub category: Option<String>,
     pub kind: SessionConfigKindInfo,
+    /// The value the AGENT recommends for this option, when it named one —
+    /// JetBrains AIR's `recommendedValue` (codex-acp 1.11.0+, gated on codeg
+    /// advertising the capability; see `build_client_capabilities`). It is a
+    /// hint, never an instruction: `current_value` still decides what is
+    /// selected, and a recommendation that matches nothing in the option list
+    /// simply marks nothing.
+    ///
+    /// `#[serde(default)]` so snapshots written before this field existed still
+    /// deserialize.
+    #[serde(default)]
+    pub recommended_value: Option<String>,
 }
 
 /// What Grok says about ONE of its models, parsed from a session response's

@@ -329,6 +329,9 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             config_values: BTreeMap::new(),
             label_snapshot: None,
             deliverable: None,
+            // No branch face on the authoring tool: the task branches from the
+            // project folder's checkout, as it did before the choice existed.
+            base_branch: None,
         };
         let config = match serde_json::to_value(&config) {
             Ok(v) => v,

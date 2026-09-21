@@ -249,6 +249,8 @@
     "appLanguage": "应用语言",
     "languageSaveSuccess": "语言设置已保存",
     "languageSaveFailed": "语言设置保存失败：{message}",
+    "dataTitle": "数据与同步",
+    "dataDescription": "「配置同步」在设备之间搬运设置；「备份」打包这台设备上的全部 codeg 数据。",
     "updateTitle": "应用升级",
     "versionTitle": "软件更新",
     "updateDescription": "点击检查后会从配置的发布源拉取最新版本信息，有新版本时可直接下载并安装。",
@@ -674,6 +676,8 @@
       "configJson": "MCP 配置(JSON)",
       "draftTitle": "新建 MCP",
       "draftDescription": "填写 Server ID 与配置以创建本地 MCP 服务器。",
+      "suggestedLabel": "从一个已知的服务器开始",
+      "suggestedChromeNote": "把表单填成 Google 官方的 chrome-devtools-mcp——registry 里有同名的仿冒包，这里钉死的是真的那个。它驱动的是**另一个** Chrome，codeg 管不到：你会拿到内置浏览器工具没有的网络与性能数据，也拿不到它们的那套防护——没有按标签页共享、没有活动条、没有逐段代码确认。`npx` 会在第一次运行时从 npm 下载这个包。",
       "serverIdLabel": "Server ID",
       "serverIdPlaceholder": "Server ID（例如：my-mcp）",
       "typeHint": "支持类型：stdio、http（别名 streamable-http、streamableHttp）、sse。env 仅适用于 stdio；远端 MCP 请通过 headers 字段传递鉴权 token。",
@@ -968,7 +972,21 @@
         "action": "退出登录",
         "done": "已退出登录。重新登录即可选择其他账号。",
         "failed": "退出登录失败"
-      }
+      },
+      "tempReclaimTitle": "残留临时空间",
+      "tempReclaimHint": "旧版本 codeg 无法清理该代理每次启动时解压的临时目录。此操作会扫描系统临时文件夹中的这些残留。该文件夹与其他应用共用，因此在你确认之前不会删除任何内容，仍在使用中的项目也会被跳过。",
+      "tempReclaimScan": "扫描",
+      "tempReclaimDelete": "删除残留",
+      "tempReclaimNone": "没有可回收的内容。",
+      "tempReclaimFound": "发现 {count} 项残留，可回收 {size}。",
+      "tempReclaimSkipped": "已跳过 {count} 项（仍在使用或过新）。",
+      "tempReclaimed": "已从 {count} 项中回收 {size}。",
+      "tempReclaimSelectAll": "全选",
+      "tempReclaimAgeHours": "{hours} 小时",
+      "tempReclaimConfirmTitle": "删除选中的 {count} 项？",
+      "tempReclaimConfirmBody": "将永久删除 {size}。系统临时目录与其他应用共用，确认前请先核对每条路径；仍在使用中的项会被跳过。",
+      "tempReclaimConfirmAction": "删除",
+      "tempReclaimCancel": "取消"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 配置",
@@ -1176,6 +1194,46 @@
           "todowrite": "写入待办列表",
           "question": "向你提问",
           "doom_loop": "同一调用以相同输入重复 3 次时触发"
+        }
+      },
+      "behavior": {
+        "title": "行为与压缩",
+        "description": "会话默认值、上下文压缩与工具输出上限。写入 opencode.json，点击下方保存后生效。",
+        "docsLink": "配置文档",
+        "unset": "未配置",
+        "defaultAgent": "默认智能体",
+        "defaultAgentHint": "新会话使用哪个主智能体。留空或填了无效名称时回落到 build。",
+        "share": "会话分享",
+        "shareHint": "会话是否可以发布成分享链接。",
+        "shareManual": "手动（需要时才分享）",
+        "shareAuto": "自动（每个新会话都分享）",
+        "shareDisabled": "禁用",
+        "autoUpdate": "自动更新",
+        "autoUpdateHint": "OpenCode 是否自行升级到最新版本。",
+        "autoUpdateOn": "自动更新",
+        "autoUpdateNotify": "仅提示",
+        "autoUpdateOff": "从不",
+        "snapshot": "文件系统快照",
+        "snapshotHint": "每一步之前记录一次快照。关闭后撤销与回滚将无法还原文件。",
+        "compactionAuto": "自动压缩",
+        "compactionAutoHint": "上下文窗口快满时自动总结会话。",
+        "compactionPrune": "裁剪旧工具输出",
+        "compactionPruneHint": "压缩时直接丢弃较早工具调用的输出，而不是把它们总结进去。",
+        "fields": {
+          "subagentDepth": "子智能体层数",
+          "tailTurns": "保留原文的轮数",
+          "preserveRecentTokens": "保留原文的 token 数",
+          "reserved": "预留 token",
+          "maxLines": "工具输出行数上限",
+          "maxBytes": "工具输出字节上限"
+        },
+        "hints": {
+          "subagentDepth": "子智能体最多可以嵌套几层。填 1 表示子智能体不能再启动子智能体。",
+          "tailTurns": "最近多少轮用户对话不参与压缩。留空表示只受下面的 token 预算约束。",
+          "preserveRecentTokens": "压缩后仍按原文保留的最近对话 token 预算。",
+          "reserved": "为压缩本身预留的窗口，避免压缩过程反而撑爆上下文。",
+          "maxLines": "超过该行数的输出会落盘，只在会话里留一段预览。默认 2000。",
+          "maxBytes": "超过该字节数的输出会落盘，只在会话里留一段预览。默认 51200。"
         }
       }
     },
@@ -1447,7 +1505,11 @@
       "ready": "适配器 {adapterCmd} 已安装 —— Codeg 启动的就是它。它自带运行时，所以不需要另外安装 {nativeLabel}；即便以后你装了，两者也能共存并共用 {configDir}。"
     },
     "cline": {
-      "configDescription": "配置 Cline API 提供商和凭证。设置将保存到 ~/.cline/data/。"
+      "configDescription": "配置 Cline API 提供商和凭证。设置将保存到 ~/.cline/data/。",
+      "signInGroup": "使用 Cline 账号登录",
+      "byoGroup": "自带供应商",
+      "externalGroup": "在 codeg 之外配置的",
+      "signInHint": "这类凭据由 cline 自己保管。在终端运行下面的命令登录——它会打印一个验证码，并打开浏览器页面让你确认。"
     },
     "opencodePlugins": {
       "title": "OpenCode 插件",
@@ -1455,7 +1517,10 @@
       "noPlugins": "opencode.json 中未声明任何插件",
       "status": {
         "installed": "已安装",
-        "missing": "未安装"
+        "needs_migration": "需要迁移",
+        "missing": "未安装",
+        "path": "路径插件",
+        "path_missing": "路径不存在"
       },
       "installAll": "安装全部缺失插件",
       "pinVersions": "固定 @latest 版本",
@@ -1586,9 +1651,57 @@
     "customAgentBadge": "自定义",
     "customAgentNotLaunchable": "该智能体在此环境无法启动：{reason}"
   },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "常规",
+    "deepseekModeDefaultDescription": "直接读写文件、执行命令完成任务",
+    "deepseekModePlan": "计划",
+    "deepseekModePlanDescription": "先调研再给出完整方案，经你确认后才动手；这只是对模型的引导，实际边界仍由「文件权限」决定。",
+    "deepseekOptionModel": "模型",
+    "deepseekOptionReasoning": "推理档位",
+    "deepseekOptionReasoningDescription": "越高越慢越费 token，难题更稳",
+    "deepseekOptionSandbox": "文件权限",
+    "deepseekOptionSandboxDescription": "命令与文件工具共用这一条边界",
+    "deepseekReasoningOff": "关闭",
+    "deepseekReasoningOffDescription": "不做推理，直接作答；最快",
+    "deepseekReasoningLow": "低",
+    "deepseekReasoningLowDescription": "略作推理；比关闭稳，比高档快",
+    "deepseekReasoningHigh": "高",
+    "deepseekReasoningHighDescription": "推理后作答；日常编码的默认档",
+    "deepseekReasoningMax": "最高",
+    "deepseekReasoningMaxDescription": "推理更久；难题更稳，但慢且更费 token",
+    "deepseekSandboxReadOnly": "只读",
+    "deepseekSandboxReadOnlyDescription": "按只读策略执行；需要写入时切换权限。部分平台上只是部分强制。",
+    "deepseekSandboxWorkspaceWrite": "可写工作区",
+    "deepseekSandboxWorkspaceWriteDescription": "写入意在限制于会话工作区与系统临时目录；越界的调用会请求单次授权。部分平台上只是部分强制。",
+    "deepseekSandboxFullAccess": "完全放开（无沙箱）",
+    "deepseekSandboxFullAccessDescription": "不施加任何文件限制。仅在你清楚后果时选择。",
+    "deepseekPermissionAllowOnce": "允许本次",
+    "deepseekPermissionRejectOnce": "拒绝"
+  },
   "SettingsPages": {
     "agentsLoading": "加载 Agent 设置中...",
     "skillPacksLoading": "正在加载技能包…"
+  },
+  "CloseBehaviorSettings": {
+    "title": "关闭按钮行为",
+    "description": "选择点击主窗口关闭按钮时的行为。",
+    "trayUnavailable": "当前系统没有可用的托盘，关闭按钮将始终退出 codeg。",
+    "behaviorAsk": "每次询问",
+    "behaviorMinimize": "最小化到托盘",
+    "behaviorExit": "退出 codeg",
+    "saveFailed": "保存关闭行为失败：{message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "要关闭 codeg 吗？",
+    "askDescription": "codeg 可以最小化到托盘继续运行，智能体和终端保持活动；也可以完全退出。",
+    "confirmExitTitle": "要退出 codeg 吗？",
+    "confirmExitDescription": "当前设置为：关闭窗口即退出 codeg。",
+    "runningTerminals": "还有 {count} 个终端正在运行，退出后会被全部结束。",
+    "remember": "记住我的选择",
+    "cancel": "取消",
+    "minimize": "最小化到托盘",
+    "exit": "退出 codeg",
+    "actionFailed": "操作失败：{message}"
   },
   "GeneralSettings": {
     "loading": "加载中...",
@@ -2041,7 +2154,8 @@
         "output": "输出",
         "cacheRead": "缓存读取",
         "cacheWrite": "缓存写入",
-        "total": "总计"
+        "total": "总计",
+        "cacheHit": "缓存命中率"
       },
       "quickActions": {
         "title": "快捷操作",
@@ -2050,6 +2164,7 @@
           "navigation": "菜单导航",
           "more": "更多"
         },
+        "browserTab": "打开浏览器",
         "showPet": "显示宠物"
       },
       "mcp": {
@@ -2074,19 +2189,6 @@
         "sessions": "智能体会话",
         "activeDelegations": "进行中的委派",
         "depthLimit": "深度上限",
-        "tools": "工具",
-        "groupDelegation": "多智能体委派",
-        "descDelegation": "把任务交给另一个智能体处理。",
-        "groupFeedback": "实时反馈",
-        "descFeedback": "回合进行中补充说明，不打断执行。",
-        "groupAsk": "向用户提问",
-        "descAsk": "让智能体拿不准时先问你。",
-        "groupSessions": "会话查询",
-        "descSessions": "查询历史会话及其结果。",
-        "groupAutomations": "创建自动化",
-        "descAutomations": "创建和管理定时自动化。",
-        "groupTaskboard": "创建任务",
-        "descTaskboard": "创建和管理工作任务。",
         "start": "启动服务",
         "starting": "正在启动…",
         "actionFailed": "操作失败：{message}",
@@ -2135,12 +2237,20 @@
     },
     "fileWorkspace": {
       "files": "文件",
+      "newTab": "新建标签页",
+      "newBrowserTab": "浏览器标签页",
+      "openFile": "打开文件…",
+      "openFileTitle": "打开文件",
+      "localServices": "本机服务",
+      "localServiceFromAgent": "智能体",
       "closeFileTab": "关闭文件标签",
       "close": "关闭",
       "closeOthers": "关闭其它",
       "closeAll": "关闭所有",
       "preview": "预览",
       "editSource": "编辑源码",
+      "openInSystemBrowser": "在系统浏览器中打开",
+      "more": "更多",
       "maximize": "最大化",
       "restore": "还原",
       "emptyDirectory": "空目录"
@@ -2266,7 +2376,6 @@
       "imageZoomOut": "缩小",
       "imageZoomReset": "重置缩放",
       "htmlPreviewTitle": "HTML 预览",
-      "htmlPreviewTrust": "运行脚本",
       "htmlPreviewTrustHint": "运行此文件的脚本并允许网络访问。仅对可信任的文件启用。",
       "officePreviewTitle": "办公文档预览",
       "officeFullRender": "完整渲染",
@@ -2936,6 +3045,8 @@
         "tasks": {
           "connectingTitle": "正在连接 {agent}",
           "connectingDescription": "正在建立连接",
+          "preparingTitle": "正在准备 {agent} 会话",
+          "preparingDescription": "正在读取历史会话记录",
           "loadingSelectorsTitle": "正在加载 {agent} 选择项",
           "loadingSelectorsDescription": "正在获取模式和会话配置选项",
           "initSessionTitle": "正在初始化 {agent} 会话",
@@ -2991,6 +3102,7 @@
         "searchModel": "搜索模型...",
         "searchModelAria": "搜索模型",
         "modelListLabel": "模型",
+        "recommendedBadge": "推荐",
         "noModels": "未找到模型",
         "cancel": "取消",
         "send": "发送",
@@ -3028,7 +3140,9 @@
         "saveEdit": "保存",
         "cancelEdit": "取消编辑",
         "editItem": "编辑",
-        "deleteItem": "删除"
+        "deleteItem": "删除",
+        "steerItemNow": "插入当前回合",
+        "steerItemAsNote": "作为留言，供下次检查时读取"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "设置 > Agents",
@@ -3259,6 +3373,7 @@
       "messageList": {
         "attachedResources": "附加资源",
         "loading": "加载中...",
+        "loadBackgroundActivity": "加载后台活动",
         "loadEarlier": "加载更早的消息",
         "loadingEarlier": "正在加载更早的消息…",
         "error": "错误：{message}",
@@ -3592,7 +3707,9 @@
         "skip": "跳过",
         "next": "下一题",
         "submit": "提交",
-        "submitError": "提交失败，请重试。"
+        "submitError": "提交失败，请重试。",
+        "collapse": "折叠",
+        "expand": "展开"
       },
       "planApproval": {
         "title": "智能体已给出计划——请审阅",
@@ -3941,6 +4058,13 @@
     "emptyDirectory": "此目录为空",
     "errorLoadingDir": "加载目录失败",
     "selectedCount": "已选 {count} 项"
+  },
+  "BranchPicker": {
+    "searchPlaceholder": "搜索分支…",
+    "none": "无分支",
+    "local": "本地",
+    "remote": "远程",
+    "useCustom": "使用 “{query}”"
   },
   "ChatChannelSettings": {
     "loading": "加载中...",
@@ -4530,13 +4654,12 @@
     "connectionExpired": "远端连接“{name}”已失效。请更新 Token 后重新加载此窗口。"
   },
   "BackupSettings": {
-    "title": "备份与恢复",
-    "description": "导出一份可移植的 codeg 数据备份，或从备份中恢复。",
     "tabs": {
       "backup": "备份",
       "restore": "恢复"
     },
     "export": {
+      "description": "把这台设备的 codeg 数据（数据库与上传文件）打包成一个归档文件。",
       "includeExternal": "包含会话内容",
       "includeExternalHint": "同时打包各 CLI 的会话记录（Claude、Codex、Gemini 等），体积更大。",
       "passphrase": "口令（可选）",
@@ -4559,6 +4682,7 @@
       }
     },
     "restore": {
+      "description": "用备份归档中的内容替换这台设备当前的 codeg 数据。",
       "selectFile": "选择备份文件",
       "passphrasePrompt": "该备份已加密，请输入其口令。",
       "unlock": "解锁",
@@ -4626,6 +4750,105 @@
       "rollbackConfirmBody": "这会用该快照替换当前数据并重启。被替换的数据会先做快照。"
     }
   },
+  "ConfigSyncSettings": {
+    "title": "配置同步",
+    "scopeTitle": "同步范围",
+    "scopeIncludedTitle": "包含",
+    "scopeExcludedTitle": "不包含",
+    "scopeIncluded": {
+      "providers": "模型服务商（含 API 密钥）",
+      "agentSettings": "智能体设置",
+      "customAgents": "自定义智能体",
+      "quickMessages": "快捷消息",
+      "taskTemplates": "任务模板",
+      "preferences": "应用偏好（语言、外观、开关）"
+    },
+    "scopeExcluded": {
+      "conversations": "会话记录与历史",
+      "uploads": "上传的文件与图片",
+      "workspaces": "工作区项目与路径",
+      "mcp": "MCP 服务器（归各 CLI 自己管）",
+      "credentials": "登录凭据与令牌"
+    },
+    "fileTitle": "配置文件",
+    "exportButton": "导出到文件",
+    "importButton": "从文件导入",
+    "fileHint": "导出为单个 JSON 文件，可拷贝到另一台设备。导入时按条目新增或更新，文件中没有的本地条目会保留。",
+    "webdavTitle": "WebDAV 同步",
+    "webdavHint": "把配置快照上传到你自己的 WebDAV 服务器。",
+    "presetLabel": "服务商",
+    "preset": {
+      "jianguoyun": "坚果云",
+      "nextcloud": "Nextcloud",
+      "synology": "群晖 NAS",
+      "custom": "自定义"
+    },
+    "presetHint": {
+      "jianguoyun": "坚果云需要在「安全选项」里生成应用密码，不能用登录密码。",
+      "nextcloud": "把域名和用户名换成你自己的，密码用「设置 → 安全」里生成的应用密码。",
+      "synology": "需要在 DSM 套件中心安装并启用 WebDAV Server，默认端口 5005（HTTP）/ 5006（HTTPS）。"
+    },
+    "serverUrl": "服务器地址",
+    "username": "用户名",
+    "password": "密码",
+    "passwordKeep": "留空则沿用已保存的密码",
+    "passwordPlaceholder": "应用密码",
+    "remoteDir": "远程目录",
+    "profile": "配置集",
+    "profileHint": "使用相同配置集的设备共享同一份配置；想区分工作与个人环境时可以分开命名。",
+    "autoSyncLabel": "自动上传",
+    "autoSyncHint": "定期检查，只在配置发生变化时上传。",
+    "intervalLabel": "检查间隔",
+    "intervalOption": "每 {minutes} 分钟",
+    "saveButton": "保存",
+    "testButton": "测试连接",
+    "uploadButton": "立即同步",
+    "restoreButton": "从远程恢复",
+    "saved": "同步设置已保存",
+    "testSucceeded": "已成功连接 WebDAV 服务器",
+    "uploaded": "配置已上传",
+    "exported": "配置已导出",
+    "restored": "已应用 {count} 条配置",
+    "imported": "已应用 {count} 条配置",
+    "noRemoteSnapshot": "服务器上还没有配置快照",
+    "lastSyncAt": "上次同步：{time}",
+    "neverSynced": "尚未同步",
+    "lastError": "上次错误：{message}",
+    "working": "处理中…",
+    "plaintextWarning": "快照以明文上传且包含 API 密钥，请只使用只有你能访问的 WebDAV 服务器。同步凭据本身不会写入快照。",
+    "importConfirmTitle": "导入配置？",
+    "importConfirmBody": "文件中的条目将在本机新增或更新，文件未涉及的本地条目会保留。",
+    "restartHint": "部分改动（外观、语言、服务商列表）需要重启 codeg 后才会生效。",
+    "importConfirmAction": "导入",
+    "restoreConfirmTitle": "从远程恢复？",
+    "restoreConfirmBody": "将把 {device} 在 {time} 上传的快照应用到本机，快照未涉及的本地条目会保留。",
+    "restoreConfirmAction": "恢复",
+    "cancel": "取消",
+    "emptySnapshot": "这份快照里没有任何配置条目。",
+    "domain": {
+      "modelProviders": "{count} 个模型服务商",
+      "agentSettings": "{count} 项智能体设置",
+      "customAgents": "{count} 个自定义智能体",
+      "quickMessages": "{count} 条快捷消息",
+      "taskTemplates": "{count} 个任务模板",
+      "preferences": "{count} 项应用偏好"
+    },
+    "rollbackTitle": "撤销导入",
+    "rollbackHint": "每次导入和每次还原前，都会先保存这台设备当时的配置，最近十份会保留下来。",
+    "rollbackAction": "撤销",
+    "rollbackUnknownTime": "时间未知",
+    "rollbackConfirmTitle": "回到这份配置？",
+    "rollbackConfirmBody": "这会用 {time} 保存的那份副本替换当前配置。当前配置会先被保存下来，所以这一步同样可以撤销。",
+    "rollbackConfirmAction": "撤销",
+    "rolledBack": "已恢复 {count} 条配置",
+    "encryptLabel": "加密快照",
+    "encryptHint": "用口令保护上传的文件。参与同步的每台设备都要使用同一个口令。",
+    "encryptedNotice": "快照会先用你的口令加密再上传。口令一旦丢失，服务器上的那份副本将无法恢复。",
+    "passphrase": "加密口令",
+    "passphraseKeep": "留空则沿用已保存的口令",
+    "passphrasePlaceholder": "加密口令",
+    "passphraseHint": "只保存在这台设备的钥匙串里，不会上传。请在你的其他设备上输入同一个口令。"
+  },
   "backup": {
     "restore": {
       "error": {
@@ -4639,6 +4862,27 @@
     "error": {
       "diskSpace": "磁盘空间不足，无法完成操作。",
       "cancelled": "操作已取消。"
+    }
+  },
+  "configSync": {
+    "error": {
+      "newerSchema": "这份快照由更新版本的 codeg 创建（格式 {snapshotVersion}），当前版本最高支持格式 {appVersion}。",
+      "checksum": "快照与校验值不符，可能不完整。",
+      "invalidSnapshot": "这不是有效的 codeg 配置快照文件。",
+      "noRemoteSnapshot": "服务器上还没有配置快照。",
+      "notConfigured": "请先完成 WebDAV 服务器配置再同步。",
+      "unauthorized": "WebDAV 服务器拒绝了该用户名或密码。",
+      "forbidden": "WebDAV 服务器拒绝访问该目录。",
+      "remotePath": "远程目录或配置集名称无效。",
+      "quota": "WebDAV 服务器已无可用空间。",
+      "network": "无法连接到 WebDAV 服务器。",
+      "server": "WebDAV 服务器返回错误（{status}）。",
+      "passphraseRequired": "该快照已加密，请先设置加密口令再同步。",
+      "badPassphrase": "无法解密该快照。请检查口令，也可能是文件已损坏。",
+      "badDomain": "无法读取该快照中的 {domain} 部分。",
+      "noRollback": "这台设备上已经没有那份保存的配置了。",
+      "credentialsUnreadable": "无法读取已保存的凭据。请解锁系统钥匙串后重试。",
+      "notEncrypted": "服务器上的快照未加密，但本机已开启加密。请从本机上传以替换它，或关闭加密后再使用。"
     }
   },
   "WebConnection": {
@@ -4671,21 +4915,53 @@
   "AgentToolsSettings": {
     "title": "会话内工具",
     "description": "codeg 在会话中额外提供给智能体的工具。工具在智能体启动时注入，改动只对之后启动的智能体生效。",
-    "feedbackLabel": "实时反馈",
-    "feedbackHint": "在智能体工作时向它发送备注与纠偏。支持即时插入的智能体会立刻在当前回合中看到你的备注；其他智能体则通过检查反馈的工具读取——这类智能体通常只有在提示词里提到时才会检查，例如在消息中加上“定期检查我的实时反馈”。",
-    "questionLabel": "向用户提问",
-    "questionHint": "允许智能体暂停并向你提出多选问题，问题会显示在会话输入框上方。智能体会一直等待，直到你作答（或跳过）。",
-    "sessionInfoLabel": "获取会话信息",
-    "sessionInfoHint": "允许智能体查询你在消息中提及的会话（会话徽章），读取其标题、智能体、状态、工作区、Token 用量和最近消息。",
-    "automationsLabel": "创建自动化",
-    "automationsHint": "把对话保存为按计划运行的自动化。默认关闭——它之后会自行启动智能体。",
-    "workTasksLabel": "创建待办任务",
-    "workTasksHint": "从对话中往待办看板排一张任务卡。默认关闭——它会写入应用状态。",
     "save": "保存",
     "saving": "保存中…",
     "saved": "工具设置已保存",
     "saveFailed": "保存工具设置失败",
     "loadFailed": "加载失败：{detail}"
+  },
+  "AgentTools": {
+    "delegation": {
+      "label": "多智能体委派",
+      "short": "把任务交给另一个智能体处理。",
+      "hint": "允许智能体把一个自洽的子任务交给另一个智能体，后者在自己的会话里跑完再回报。其余设置——最多能嵌套几层、由哪个智能体来跑——在上面那一节。"
+    },
+    "feedback": {
+      "label": "实时反馈",
+      "short": "回合进行中补充说明，不打断执行。",
+      "hint": "在智能体工作时向它发送备注与纠偏。支持即时插入的智能体会立刻在当前回合中看到你的备注；其他智能体则通过检查反馈的工具读取——这类智能体通常只有在提示词里提到时才会检查，例如在消息中加上“定期检查我的实时反馈”。"
+    },
+    "ask": {
+      "label": "向用户提问",
+      "short": "让智能体拿不准时先问你。",
+      "hint": "允许智能体暂停并向你提出多选问题，问题会显示在会话输入框上方。智能体会一直等待，直到你作答（或跳过）。"
+    },
+    "sessions": {
+      "label": "获取会话信息",
+      "short": "查询历史会话及其结果。",
+      "hint": "允许智能体查询你在消息中提及的会话（会话徽章），读取其标题、智能体、状态、工作区、Token 用量和最近消息。"
+    },
+    "browser": {
+      "label": "读取和操作内置浏览器",
+      "short": "打开、读取并操作内置浏览器里的页面。",
+      "hint": "允许智能体看到内置浏览器里开着哪些页面、读取你共享的那些，并在你允许操作的页面上点击和输入；它也可以自己打开一个地址、把标签页指向别处、关闭标签页。默认关闭。读哪一页仍然是你在那个标签页的工具栏上单独做的决定——但请注意：只要设了默认共享级别，智能体自己打开的页面一加载就会按那个级别共享给它。关闭这个开关立即生效，正在运行的智能体也一样。"
+    },
+    "browserEval": {
+      "label": "在内置浏览器中执行代码",
+      "short": "在你共享的页面上运行它自己写的代码，默认不询问。",
+      "hint": "允许智能体在你共享的页面上运行它自己写的 JavaScript。默认关闭，并且需要先打开上面那个开关。打开它就意味着代码不经询问直接运行，所以决定权就在这个开关上；如果想逐段过目，可在「设置 → 内置浏览器」里改成每次都问你。"
+    },
+    "automations": {
+      "label": "创建自动化",
+      "short": "创建和管理定时自动化。",
+      "hint": "把对话保存为按计划运行的自动化。默认关闭——它之后会自行启动智能体。"
+    },
+    "taskboard": {
+      "label": "创建待办任务",
+      "short": "创建和管理工作任务。",
+      "hint": "从对话中往待办看板排一张任务卡。默认关闭——它会写入应用状态。"
+    }
   },
   "DesktopNotificationSettings": {
     "title": "桌面通知",
@@ -4744,6 +5020,98 @@
     "tonePop": "轻点",
     "toneAlert": "警示",
     "toneDescend": "下行音"
+  },
+  "BrowserSettings": {
+    "title": "内置浏览器",
+    "description": "从会话、工具结果和终端打开的网页可以作为标签页显示在文件旁边，而不必离开应用。",
+    "defaultTargetTitle": "链接在哪里打开",
+    "defaultTargetHint": "按来源分别设置。按住 ⌘/Ctrl 点击链接可临时使用另一种方式。",
+    "sourceTranscript": "会话消息",
+    "sourceToolCard": "工具结果",
+    "sourceTerminal": "终端",
+    "sourceEditor": "编辑器",
+    "sourceNotification": "通知",
+    "targetBuiltin": "内置浏览器",
+    "targetSystem": "系统浏览器",
+    "devtoolsTitle": "网页检查器",
+    "devtoolsHint": "在标签页的「更多」菜单里提供「打开检查器」，并允许页面上的「检查元素」。默认开启。对此后打开的标签页生效。",
+    "surfaceTitle": "标签页承载方式",
+    "surfaceHint": "网页以何种方式承载。除非嵌入式标签页在本机表现异常，否则保持「自动」。对此后打开的标签页生效。",
+    "surfaceAuto": "自动",
+    "surfaceChild": "嵌入工作区",
+    "surfaceWindow": "独立窗口",
+    "clearTitle": "浏览数据",
+    "clearHint": "所有浏览器标签页共用的 Cookie、缓存和站点存储。清除后会退出各网站的登录。",
+    "clearAction": "清除…",
+    "clearConfirmTitle": "清除浏览数据？",
+    "clearConfirmDescription": "将删除内置浏览器的 Cookie、缓存和站点存储。已打开的标签页会保留，但各网站的登录状态会失效。",
+    "clearConfirmAction": "清除",
+    "cancel": "取消",
+    "cleared": "浏览数据已清除",
+    "clearFailed": "无法清除浏览数据：{message}",
+    "proxyTitle": "网络代理",
+    "proxyHint": "浏览器标签页使用「系统设置」里的代理。本机地址（localhost）永远不走代理。",
+    "proxyOn": "正在使用 {url}",
+    "proxyOff": "直接连接",
+    "proxyNextTab": "代理变更对此后打开的标签页生效。",
+    "proxyRestart": "代理已变更，重启 codeg 后浏览器标签页才会使用新代理。",
+    "proxyUnsupported": "当前 macOS 版本不支持（需要 macOS 14 或更高）。",
+    "proxyUnusable": "配置的代理不是浏览器标签页能使用的类型（仅支持 http 和 socks5）。",
+    "suspendTitle": "卸载后台标签页",
+    "suspendHint": "释放在后台停留 30 分钟的浏览器标签页所占的内存。切回时会重新加载；滚动位置和历史记录会丢失。",
+    "downloadsTitle": "下载",
+    "downloadsHint": "网页下载的文件保存在 {dir}。不会自动打开，也不会覆盖已有文件。",
+    "rulesTitle": "站点规则",
+    "rulesHint": "按站点设定：始终用内置浏览器、始终用系统浏览器，或阻止。模式可以是主机名、*.example.com 或 *，可选加 :端口；最具体的匹配生效。",
+    "serviceOpenTitle": "本机服务",
+    "serviceOpenHint": "终端里启动的服务打印出地址时，在浏览器标签页中打开它。只认本机地址，且必须确认那个端口上真的有程序在监听。",
+    "serviceOpenOff": "什么都不做",
+    "serviceOpenNotify": "通知我",
+    "serviceOpenOpen": "直接打开标签页",
+    "rulePatternPlaceholder": "example.com 或 *.example.com",
+    "rulePatternLabel": "站点模式",
+    "ruleActionLabel": "动作",
+    "ruleActionFor": "{pattern} 的动作",
+    "ruleAdd": "添加",
+    "ruleRemove": "删除规则",
+    "ruleActionBlock": "阻止",
+    "ruleManaged": "由管理员设定",
+    "ruleInvalid": "不是有效的模式",
+    "ruleDuplicate": "已有针对该模式的规则",
+    "rulesEmpty": "还没有规则。",
+    "agentGrantTitle": "默认共享权限",
+    "agentGrantHint": "标签页每打开一个站点，就按这个权限共享给智能体，不再询问。页面上的控件仍可逐站点修改或收回；选「不共享」则完全交由该控件决定。",
+    "agentGrantRead": "读取权限",
+    "agentGrantControl": "读取并操作权限",
+    "agentGrantNone": "不共享",
+    "evalApprovalTitle": "在页面上运行代码",
+    "evalApprovalHint": "智能体要在共享为「读取并操作权限」的页面上运行它自己写的 JavaScript 时怎么办。默认直接运行，不再询问——决定权在「在内置浏览器中执行代码」那个开关（默认关闭，要你亲手打开）和页面的共享权限上；每一次运行都记在那个标签页的智能体活动里。选「每次都问我」则会把每一段代码原样摆在你面前，等你回答。",
+    "evalApprovalAsk": "每次都问我",
+    "evalApprovalSilent": "静默执行",
+    "terminalMenuTitle": "终端链接菜单",
+    "terminalMenuHint": "点击终端里的链接时先弹出一个小菜单（内置浏览器、系统浏览器、复制链接），而不是直接打开。⌘/Ctrl 点击仍会直接打开。",
+    "htmlPreviewTitle": "HTML 文件预览",
+    "htmlPreviewHint": "通过内置浏览器以受限的文档视图显示 HTML 文件：在你为某个文件启用之前不运行脚本，且只能访问它自己的文件夹。关闭后使用内联预览，与网页版相同。",
+    "managedDisabled": "管理员策略已关闭内置浏览器；链接将在系统浏览器中打开。",
+    "profilesTitle": "配置文件",
+    "profilesHint": "每个配置文件有自己的 Cookie、站点存储和登录状态。新标签页在下方选定的配置文件中打开；标签页工具栏可以把当前页面在另一个配置文件里打开。",
+    "profileDefault": "默认",
+    "profileNewTabsTitle": "新标签页使用",
+    "profileNamePlaceholder": "配置文件名称，例如「工作」",
+    "profileNameLabel": "配置文件名称",
+    "profileAdd": "添加配置文件",
+    "profileNameRequired": "请输入配置文件名称",
+    "profileNameDuplicate": "已有同名的配置文件",
+    "profileClear": "清除 {name} 的浏览数据",
+    "profileDelete": "删除配置文件 {name}",
+    "profileDeleteConfirmTitle": "删除配置文件 {name}？",
+    "profileDeleteConfirmDescription": "它的标签页会被关闭，Cookie、缓存和站点存储会被删除。此操作无法撤销。",
+    "profileDeleteConfirmAction": "删除",
+    "profileDeleted": "配置文件已删除",
+    "profileDeleteFailed": "无法删除配置文件：{message}",
+    "clearConfirmDescriptionProfile": "将删除配置文件 {name} 的 Cookie、缓存和站点存储。已打开的标签页会保留，但各网站的登录状态会失效。",
+    "signInUaTitle": "Google 登录兼容",
+    "signInUaHint": "Google 拒绝在内嵌浏览器中登录。开启后，标签页只对 Google 的登录页面（accounts.google.com）呈现 Firefox 身份；其他地方一律以自身所在引擎的身份示人，不会冒充 Firefox。仅对嵌入式标签页生效，独立窗口不适用；登录页把你跳转到别的站点时，到那里的第一个请求仍带着登录身份。"
   },
   "LogsSettings": {
     "loading": "加载中…",
@@ -4923,12 +5291,7 @@
     "cronApply": "应用",
     "cronPreviewLabel": "预览",
     "cronOpenBuilder": "打开计划生成器",
-    "branchDefault": "默认分支",
-    "branchUseCustom": "使用 “{query}”",
-    "branchLocal": "本地",
-    "branchRemote": "远程",
-    "branchSearchPlaceholder": "搜索分支…",
-    "branchNone": "无分支"
+    "branchDefault": "默认分支"
   },
   "Tasks": {
     "title": "待办任务",
@@ -5059,6 +5422,10 @@
     "promptLabel": "任务描述",
     "promptPlaceholder": "向 agent 描述任务——输入 @ 可引用文件，/ 可唤起命令",
     "folderPlaceholder": "选择文件夹",
+    "baseBranch": "基准分支",
+    "baseBranchPlaceholder": "当前分支",
+    "baseBranchDefault": "任务开始时的当前分支",
+    "baseBranchHint": "任务从该分支拉出工作树，合并时也落回该分支。",
     "agentInheritedHint": "继承自任务设置，修改后仅对本任务生效",
     "agentOverrideReset": "恢复继承",
     "sectionTarget": "目标",
@@ -5840,5 +6207,250 @@
     "terminalNoDirectory": "这张卡片没有工作目录",
     "confirmDeleteTerminals": "{count} 个正在运行的终端会被关闭，其中的进程也会一并结束。",
     "confirmDeleteNotesAndTerminals": "你写下的 {notes} 条便签将被永久删除，另有 {terminals} 个正在运行的终端会被结束。"
+  },
+  "Browser": {
+    "toolbar": {
+      "back": "后退",
+      "forward": "前进",
+      "reload": "刷新",
+      "stop": "停止",
+      "openInSystem": "在系统浏览器中打开",
+      "more": "更多",
+      "copyUrl": "复制链接",
+      "copied": "链接已复制",
+      "openInspector": "打开检查器",
+      "inspectorFailed": "打不开检查器",
+      "addressPlaceholder": "输入地址",
+      "invalidUrl": "不是有效的地址",
+      "profile": "配置文件：{name}",
+      "profileMenuLabel": "在其他配置文件中打开此页",
+      "profileDefault": "默认"
+    },
+    "status": {
+      "popupDenied": "已拦截弹窗：{host}",
+      "popupDeniedNoGesture": "不是由点击触发",
+      "popupDeniedBlockedScheme": "不允许的地址类型",
+      "popupOpenAnyway": "仍然打开",
+      "dismiss": "关闭",
+      "errorDns": "找不到该网站",
+      "errorTls": "连接不安全",
+      "errorBlocked": "内置浏览器不允许打开该地址",
+      "errorPopupDenied": "弹窗已拦截",
+      "errorFailed": "页面无法加载",
+      "errorFailedHint": "没有连接到该网站。请检查网络和地址，必要时可能需要代理。",
+      "retry": "重试",
+      "openInSystem": "在系统浏览器中打开",
+      "ownedWindow": "该页面显示在独立窗口中。",
+      "ownedWindowShow": "显示窗口",
+      "remoteBanner": "经由 {host} 打开",
+      "navigationBlocked": "已阻止跳转：{host}",
+      "navigationBlockedRule": "被站点规则阻止",
+      "navigationBlockedScheme": "此类地址不能在这里打开",
+      "navigationBlockedOpenSystem": "用系统应用打开",
+      "errorBlockedHint": "站点规则阻止了这个地址。规则在「设置 → 内置浏览器」中管理。",
+      "popupDeniedBlockedHost": "被站点规则阻止",
+      "channelDegraded": "此标签页的弹窗会被拦截，地址栏可能跟不上页面",
+      "channelDegradedHint": "codeg 未能装入页面脚本。此页面打开的弹窗会被拦截，地址栏不会跟随页内导航，在页面中按查找快捷键也不会打开查找栏。重新打开该标签页会再试一次。",
+      "downloadsDenied": "已拦截下载：{host}",
+      "downloadsDeniedNoGesture": "多个文件，不是由点击触发",
+      "agentGrantLost": "共享已结束：页面离开了 {origin}",
+      "agentGrantLostShare": "也共享 {origin}",
+      "agentGrantReplaced": "共享已结束：现在是另一个程序在 {origin} 上提供服务",
+      "agentGrantReplacedShare": "仍然共享"
+    },
+    "tab": {
+      "untitled": "新标签页"
+    },
+    "drawer": {
+      "title": "内置浏览器",
+      "description": "从会话中打开的网页",
+      "openInWorkspace": "在工作区中打开",
+      "cannotOpen": "无法在此打开该地址。"
+    },
+    "bridge": {
+      "frameTitle": "开发服务器预览",
+      "opening": "正在通过服务器连接…",
+      "reload": "重新加载",
+      "openExternal": "在新标签页打开",
+      "copyAddress": "复制地址",
+      "copied": "已复制地址",
+      "unreachableTitle": "无法访问端口桥",
+      "unreachableHint": "codeg 服务器把这个页面放在 {origin}，但你的浏览器访问不到它。请开放该端口（见 CODEG_BRIDGE_PORTS）或设置 CODEG_BRIDGE_PUBLIC_HOST；如果 codeg 通过 HTTPS 提供服务，端口桥也需要 HTTPS。",
+      "errorTitle": "无法在这里显示此页面"
+    },
+    "download": {
+      "started": "正在下载…",
+      "completed": "已保存",
+      "failed": "下载失败",
+      "reveal": "在文件夹中显示",
+      "dismiss": "忽略"
+    },
+    "find": {
+      "placeholder": "在页面中查找",
+      "next": "下一个",
+      "previous": "上一个",
+      "noMatches": "无匹配",
+      "close": "关闭"
+    },
+    "toast": {
+      "firstOpen": "已在内置浏览器中打开",
+      "firstOpenHint": "按住 ⌘/Ctrl 点击链接可改用系统浏览器。默认方式可在设置中修改。",
+      "useSystemAlways": "始终使用系统浏览器",
+      "serviceDetected": "{address} 上有服务在运行",
+      "serviceDetectedHint": "来自终端。可在「设置 → 内置浏览器」里改成自动打开。",
+      "serviceOpen": "打开",
+      "blockedHost": "被站点规则阻止：{host}"
+    },
+    "link": {
+      "openBuiltin": "在内置浏览器中打开",
+      "openSystem": "在系统浏览器中打开",
+      "copy": "复制链接"
+    },
+    "doc": {
+      "scriptsOff": "启用脚本",
+      "scriptsOn": "脚本已启用",
+      "scriptsHint": "运行此文档的脚本。脚本只能读取所在文件夹里的文件，无法访问网络。之后这些文件有任何变化，脚本会再次关闭。",
+      "reload": "重新加载",
+      "more": "更多",
+      "copyPath": "复制路径",
+      "useInline": "使用内联预览",
+      "useGuest": "使用内置浏览器预览",
+      "unsaved": "未保存的修改不会显示",
+      "reset": "{file} 在启用脚本后发生了变化，脚本已再次关闭。",
+      "enableAgain": "再次启用",
+      "dismiss": "关闭",
+      "externalLink": "未跟随指向 {host} 的链接",
+      "openLink": "打开链接",
+      "downloadRefused": "文档预览中不允许下载",
+      "openWithSystem": "用系统应用打开",
+      "schemeBlocked": "{url} 不能在这里打开",
+      "cannotShow": "无法显示此文档"
+    },
+    "agent": {
+      "share": "把此页面共享给智能体（{origin}）",
+      "shareLabel": "共享给智能体",
+      "shareRead": "读取权限",
+      "shareControl": "读取并操作权限",
+      "levelDefault": "默认",
+      "notShareable": "此页面没有可共享给智能体的网址",
+      "shared": "已共享",
+      "sharedControl": "已共享 · 可操作",
+      "sharedWith": "智能体可读取 {origin}",
+      "sharedWithControl": "智能体可以读取并操作 {origin}",
+      "sharedScope": "页面一旦离开该站点，共享即结束。",
+      "sharedScopeProgram": "如果这个端口从 {program} 换成了别的程序，共享同样结束。",
+      "sharedToast": "智能体现在可以读取 {origin}",
+      "sharedControlToast": "智能体现在可以读取并操作 {origin}",
+      "stopSharing": "停止共享",
+      "allowActions": "允许在此页面上操作",
+      "readOnly": "仅读取",
+      "shareFailed": "此页面无法共享给智能体",
+      "activity": {
+        "read": {
+          "done": "读取了页面",
+          "refused": "已拒绝：此页面未共享",
+          "failed": "读取页面失败"
+        },
+        "click": {
+          "done": "点击了",
+          "refused": "已拒绝点击：此页面不允许操作",
+          "failed": "无法点击"
+        },
+        "hover": {
+          "done": "悬停了",
+          "refused": "已拒绝悬停：此页面不允许操作",
+          "failed": "无法悬停"
+        },
+        "type": {
+          "done": "在输入框中输入了",
+          "refused": "已拒绝输入：此页面不允许操作",
+          "failed": "无法输入"
+        },
+        "press": {
+          "done": "按下了一个键",
+          "refused": "已拒绝按键：此页面不允许操作",
+          "failed": "无法按键"
+        },
+        "select": {
+          "done": "选择了一个选项",
+          "refused": "已拒绝选择：此页面不允许操作",
+          "failed": "无法选择选项"
+        },
+        "capture": {
+          "done": "截了一张图",
+          "refused": "已拒绝截图：此页面未共享",
+          "failed": "截图失败"
+        },
+        "console": {
+          "done": "读取了控制台",
+          "refused": "已拒绝读取控制台：此页面未共享",
+          "failed": "读取控制台失败"
+        },
+        "eval": {
+          "done": "在页面上运行了代码",
+          "refused": "已拒绝在此页面运行代码",
+          "failed": "代码没能运行"
+        },
+        "open": {
+          "done": "打开了这个页面",
+          "refused": "已拒绝打开标签页",
+          "failed": "无法打开标签页"
+        },
+        "navigate": {
+          "done": "跳转到了另一个地址",
+          "refused": "已拒绝跳转：此页面不允许操作",
+          "failed": "无法更换地址"
+        },
+        "close": {
+          "done": "关闭了这个标签页",
+          "refused": "已拒绝关闭：此页面不允许操作",
+          "failed": "无法关闭这个标签页"
+        }
+      },
+      "activityCount": "{count} 次",
+      "activityTitle": "智能体在此页面的操作",
+      "activityLabel": "智能体操作记录：{entry}",
+      "eval": {
+        "title": "在 {site} 上运行这段代码？",
+        "description": "有智能体想在这个页面上运行 JavaScript。你在 {site} 上能读取和改动的一切，它都能。",
+        "descriptionWithTitle": "有智能体想在「{title}」上运行 JavaScript。你在 {site} 上能读取和改动的一切，它都能。",
+        "codeLabel": "它要运行的代码",
+        "everyTime": "每一段代码都会再问你一次——批准这一段不等于批准下一段。问不问由「设置 → 内置浏览器」决定。",
+        "allow": "运行这一次",
+        "deny": "不要运行"
+      }
+    },
+    "handoff": {
+      "send": "把这个页面发给对话",
+      "sendLabel": "发给对话",
+      "noConversation": "先打开一个对话，才能把页面发过去",
+      "pickElement": "选择一个元素…",
+      "screenshot": "发送一张截图",
+      "consoleErrors": "发送控制台报错",
+      "consoleClean": "这个页面没有出错",
+      "picking": "选择中…",
+      "pickingHint": "在页面上点一个元素，或按 Esc 结束",
+      "pickingCancel": "结束选择",
+      "sent": "已加入对话",
+      "failed": "这个页面发不过去",
+      "noConsoleErrors": "这个页面没有打印过报错",
+      "chipElement": "页面元素",
+      "chipScreenshot": "页面截图",
+      "chipConsole": "{count, plural, other {# 条控制台报错}}",
+      "gone": "那个对话已经关掉了",
+      "consoleErrorsCount": "{count, plural, other {发送 # 条控制台报错}}"
+    }
+  },
+  "browser": {
+    "agent": {
+      "error": {
+        "grantRequired": "这个标签页还没有共享给智能体。共享后智能体才能读取页面。"
+      }
+    },
+    "inspector": {
+      "error": {
+        "switchedOff": "这个标签页是在网页检查器关闭时打开的。请在浏览器设置里打开它，然后重新打开该页面。"
+      }
+    }
   }
 }

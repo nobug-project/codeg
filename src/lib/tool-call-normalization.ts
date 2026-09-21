@@ -28,6 +28,24 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // input shape instead — see the `command_line` / `CommandLine` keys in
   // `inferFromInput`. Both paths land on the same Terminal card.
   run_command: "bash",
+  // Windows shells, under the two names that reach a client. Claude Code's CLI
+  // runs commands through a `PowerShell` tool whenever Windows has no Git Bash
+  // (SDK `SDKStartupFailureReason.shell_tool_missing` names the same pair), and
+  // pi swaps `powershell` in for `bash` on the same platform. The freeform
+  // matcher below cannot help: its `\bshell\b` needs a word boundary that
+  // "powershell" does not have.
+  //
+  // Without the alias the name only half-resolved — `getToolIcon` and
+  // `classifyToolKind` matched it, so the call drew a terminal icon and counted
+  // as a command, while every dispatch keyed on the NORMALIZED name
+  // (`isCommandTool`, `deriveToolTitle`, `StructuredToolInput`) fell through to
+  // the generic renderer and dumped the input as raw JSON with no command line
+  // and no terminal body. The live ACP path was rescued only once `rawInput`
+  // streamed and `inferFromInput` found a `command` key in it; the history path
+  // never is, because `parsers/claude.rs` and `parsers/pi.rs` both read the raw
+  // tool name back out of the transcript — so the same call rendered one way
+  // while it ran and another way on reload.
+  powershell: "bash",
   exec_command: "exec_command",
   "functions.exec_command": "exec_command",
   "functions.read": "read",
@@ -271,6 +289,22 @@ function isCodexWebSearchTitle(input: string | null | undefined): boolean {
   )
 }
 
+/**
+ * Gemini's web-search title, for the same reason Codex needs one above: its
+ * `google_web_search` tool reports `kind: "search"` — the kind it also uses for
+ * glob and grep — so the title is the only thing that says "web". The format is
+ * `Searching the web for: "<query>"`, straight from the tool's own
+ * `getDescription()` (packages/core/src/tools/web-search.ts, gemini-cli 0.60.0).
+ *
+ * Anchored at the start so an assistant or MCP tool that merely mentions the
+ * phrase mid-title is not swept in.
+ */
+function isGeminiWebSearchTitle(input: string | null | undefined): boolean {
+  const title = input?.trim()
+  if (!title) return false
+  return /^searching\s+the\s+web\s+for\s*:/i.test(title)
+}
+
 /** Codex's raw-input marker is camelCase on the ACP wire (`webSearch`). */
 function isCodexWebSearchType(input: unknown): boolean {
   if (typeof input !== "string") return false
@@ -423,6 +457,7 @@ function inferFromInput(
       normalizedKind === "websearch" ||
       normalizedKind === "web_search" ||
       isCodexWebSearchTitle(title) ||
+      isGeminiWebSearchTitle(title) ||
       isCodexWebSearchType(parsed.type))
   )
     return "websearch"
@@ -691,6 +726,24 @@ export function inferLiveToolName(params: {
   // carries no `subagent` flag.
   if (claudeCodeMarksSubagent(params.meta)) return "agent"
 
+  // OpenCode's authoritative tool name, recorded by the backend from the one
+  // frame that carries it (`stamp_opencode_tool_name`). This is the exception
+  // to the input-shape-first ordering below, and deliberately so: OpenCode's
+  // completion frame drops `kind`/`rawInput` and rewrites `title` into a
+  // display label, so the input shape is ALL that survives — and several of its
+  // tools are ambiguous under it. Measured against opencode 1.18.30's real
+  // frames, `glob` ({pattern}) resolved to "grep", `lsp_diagnostics` ({path}) to
+  // "read", and an MCP tool taking {query} to "websearch" — each of which the
+  // history parser (reading `part.tool`) names correctly, so the same call
+  // changed identity on reload.
+  //
+  // Placed AFTER the `title === "agent"` sentinel at the top, which is what
+  // keeps OpenCode's own sub-agent `task` call on the Agent card: the backend
+  // rewrites that title once `rawInput.subagent_type` arrives, and the marker
+  // here (recorded from the arg-less opening frame) must not undo it.
+  const openCodeToolName = extractOpenCodeToolName(params.meta)
+  if (openCodeToolName) return normalizeToolName(openCodeToolName)
+
   // Input-shape detection runs FIRST so cross-agent heuristics (Claude Code
   // `Task` tool routed via `subagent_type`, OpenCode sub-agent calls, etc.)
   // keep priority. The meta-tool-name override below only kicks in when the
@@ -799,6 +852,29 @@ function extractQoderToolName(
   const qoder = (meta as Record<string, unknown>).qoder
   if (!qoder || typeof qoder !== "object") return null
   const name = (qoder as Record<string, unknown>).toolName
+  if (typeof name !== "string") return null
+  const trimmed = name.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+/**
+ * OpenCode's authoritative tool name from `_meta.opencode.toolName` — the raw
+ * tool id (`glob`, `lsp_diagnostics`, `context7_query-docs`, …) codeg's backend
+ * lifts off the opening `tool_call` frame, which is the only frame OpenCode
+ * states it on (see `stamp_opencode_tool_name` for the captured wire evidence).
+ * The same name the history parser reads out of `part.tool`, so both paths land
+ * on the same card.
+ *
+ * Only the OPENING frame carries it; the reducer preserves a block's `meta`
+ * when an update omits it, so it stays available for the call's whole lifetime.
+ */
+function extractOpenCodeToolName(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  if (!meta || typeof meta !== "object") return null
+  const opencode = (meta as Record<string, unknown>).opencode
+  if (!opencode || typeof opencode !== "object") return null
+  const name = (opencode as Record<string, unknown>).toolName
   if (typeof name !== "string") return null
   const trimmed = name.trim()
   return trimmed.length > 0 ? trimmed : null

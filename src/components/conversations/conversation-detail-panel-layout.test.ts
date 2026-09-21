@@ -407,6 +407,37 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(flushEffect).not.toContain("connectedWorkingDir")
   })
 
+  it("holds the queue auto-flush while a queued row is being inserted", () => {
+    // A queued row's click-to-insert leaves the row in the queue for the whole
+    // round-trip (it only goes once delivery is confirmed). If the turn ends in
+    // that window, the flush would dequeue and send the very row the backend
+    // just injected — the same instruction delivered twice. The hold is
+    // released in a `finally`, and the flag is a dependency, so the flush
+    // resumes on the next commit either way.
+    const start = source.indexOf("// Flush queued messages whenever the agent")
+    const depsEnd = source.indexOf("clearTimeout(timer)", start)
+    const effectWithDeps = source.slice(
+      start,
+      source.indexOf("])", depsEnd) + 2
+    )
+    expect(effectWithDeps).toContain("if (queueSteerInFlight) return")
+    // …and as a dependency, so releasing the hold re-runs the flush.
+    expect(effectWithDeps).toContain("queueSteerInFlight])")
+
+    const steerStart = source.indexOf("const handleQueueSteer = useCallback")
+    expect(steerStart).toBeGreaterThan(-1)
+    const steerHandler = source.slice(
+      steerStart,
+      source.indexOf("[msgQueue, feedbackSteer", steerStart)
+    )
+    // Set BEFORE the first await, cleared in a finally.
+    expect(steerHandler.indexOf("setQueueSteerInFlight(true)")).toBeLessThan(
+      steerHandler.indexOf("await feedbackSteer(")
+    )
+    expect(steerHandler).toContain("finally {")
+    expect(steerHandler).toContain("setQueueSteerInFlight(false)")
+  })
+
   it("disables the welcome composer while connected-but-not-ready", () => {
     // The composer reads a downgraded status so its send affordance is disabled
     // during the transient mismatch window instead of inviting a rejected send.

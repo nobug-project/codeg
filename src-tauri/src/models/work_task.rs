@@ -182,6 +182,18 @@ pub struct WorkTaskConfig {
     /// config written by a newer build must still launch here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deliverable: Option<String>,
+    /// The branch this task is FOR: its worktree branches from that branch's
+    /// tip, and the merge lands back onto it. `None` — every task created
+    /// before this existed included — keeps the original behaviour: whatever
+    /// the project folder is checked out on when the task is claimed. A
+    /// pull-request task ignores it; its base comes from the pull request.
+    ///
+    /// Only the request lives here. The branch actually used is recorded on
+    /// `work_task.base_branch` when the worktree is created, and everything
+    /// downstream (merge, delivery, diff baseline) reads that column — so
+    /// editing this afterwards cannot re-base a task that already ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.

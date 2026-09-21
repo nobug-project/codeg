@@ -91,6 +91,42 @@ pub struct AvailableTerminalShells {
     pub resolved_shell: String,
 }
 
+/// What the main window's close button does.
+///
+/// Three values rather than the two a settings page needs, because the third
+/// is what makes the other two discoverable: codeg has always hidden to tray,
+/// and a user who believes the app exited never goes looking for a preference
+/// to change. `Ask` shows the choice once, on the first close, and pins itself
+/// to `Minimize` or `Exit` from there.
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseWindowBehavior {
+    #[default]
+    Ask,
+    Minimize,
+    Exit,
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SystemCloseBehaviorSettings {
+    pub behavior: CloseWindowBehavior,
+}
+
+/// The settings-page view. `tray_available` is a live platform capability, not
+/// a stored value: where the tray is unusable the close button force-exits and
+/// the preference cannot apply, so the UI disables the control and says why.
+/// Sending it from the backend keeps the frontend from re-deriving it by
+/// guessing at the OS.
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SystemCloseBehaviorSettingsView {
+    pub behavior: CloseWindowBehavior,
+    pub tray_available: bool,
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

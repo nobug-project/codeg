@@ -217,11 +217,29 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     return raw
   }, [store, contextKey])
   const connection = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  // A `connect()` that has started but not yet produced an entry. Rides the
+  // same per-key listener set, so one subscription covers both.
+  const getPendingSnapshot = useCallback(
+    () => store.getConnectPending(contextKey),
+    [store, contextKey]
+  )
+  const connectPending = useSyncExternalStore(
+    subscribe,
+    getPendingSnapshot,
+    getPendingSnapshot
+  )
 
   const connectionId = connection?.connectionId ?? null
   const agentType = connection?.agentType ?? null
   const isViewer = connection?.isViewer ?? false
-  const status = connection?.status ?? null
+  // An in-flight `connect()` IS "connecting", even though the store has no
+  // entry for it yet: the backend call that creates one only returns after the
+  // agent has spawned, handshaken and resumed the session, so reporting `null`
+  // for that whole stretch told every consumer "idle, nothing in flight" —
+  // which is how opening a historical conversation ended up with no composer
+  // placeholder, no loading cue and no status-bar task. A real entry always
+  // wins: once it exists, its own status is the more specific truth.
+  const status = connection?.status ?? (connectPending ? "connecting" : null)
   const promptCapabilities =
     connection?.promptCapabilities ?? DEFAULT_PROMPT_CAPABILITIES
   const supportsFork = connection?.supportsFork ?? false

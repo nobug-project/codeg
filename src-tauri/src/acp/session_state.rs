@@ -363,6 +363,24 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub asserted_config_values: BTreeMap<String, String>,
+    /// Config-option ids this launch pinned through the environment, which the
+    /// agent will therefore refuse to change for as long as the process lives.
+    ///
+    /// Cline forced this. codeg pins the provider with `CLINE_PROVIDER` — the
+    /// only way a bring-your-own provider clears cline's ACP auth gate — and
+    /// cline then answers `set_config_option("provider", …)` with `Invalid
+    /// params: Cannot change provider: CLINE_PROVIDER environment variable is
+    /// set`. It keeps advertising the selector regardless, so without this the
+    /// composer offers a dropdown whose every choice is an error, and a
+    /// preference saved from one of those clicks is replayed — and fails —
+    /// on every later connect.
+    ///
+    /// codeg is what disabled the control, so codeg is what withholds it: these
+    /// ids are dropped from what the frontend is told about and skipped when
+    /// saved preferences are replayed.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub env_pinned_config_option_ids: Vec<String>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -447,6 +465,19 @@ pub struct SessionState {
     /// comes back `startedNewTurn` (adapter ignored the `promptRequired`
     /// opt-in), rerouting subsequent notes to the MCP pull path.
     pub native_steering_available: bool,
+
+    /// Which generation of codex-acp's `request_user_input` bridge this
+    /// connection is talking to — 1.12.0 swapped the question and the tab
+    /// header between a form property's `title` and `description`, and nothing
+    /// on the wire distinguishes the two. Pinned ONCE at initialize from the
+    /// RUNNING adapter's `agentInfo.version`
+    /// (`connection.rs::codex_user_input_shape`), because launch may resolve an
+    /// older PATH install or a user's custom pinned version rather than the
+    /// registry's. `None` for every non-codex agent, and for a codex adapter
+    /// that reported no `agentInfo`; the elicitation parser then dates the form
+    /// from its own markers. Backend-internal routing only: not part of the
+    /// client snapshot.
+    pub codex_user_input_shape: Option<crate::acp::question::CodexUserInputShape>,
 
     /// Which `session_info_update` meta key carries goal snapshots for this
     /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
@@ -648,6 +679,7 @@ impl SessionState {
             grok_model_specs: None,
             pi_startup_banner: None,
             asserted_config_values: BTreeMap::new(),
+            env_pinned_config_option_ids: Vec::new(),
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),
@@ -663,6 +695,7 @@ impl SessionState {
             delegation_enabled: false,
             feedback_tool_available: false,
             native_steering_available: false,
+            codex_user_input_shape: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
             goal_actions: None,
@@ -4023,6 +4056,7 @@ mod tests {
                     options: vec![],
                     groups: vec![],
                 }),
+                recommended_value: None,
             }],
         });
         s.apply_event(&AcpEvent::UsageUpdate {

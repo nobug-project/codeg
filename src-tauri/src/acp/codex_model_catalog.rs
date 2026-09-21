@@ -68,7 +68,7 @@ struct EnumSpec {
 
 // Authoritative value sets + nullability, extracted from the codex binary itself
 // by feeding it candidate catalogs and reading the full `unknown variant …,
-// expected …` / `invalid type: null, expected …` errors (re-probed on 0.153.4,
+// expected …` / `invalid type: null, expected …` errors (re-probed on 0.154.0,
 // unchanged since 0.147 — treat these as version-specific and re-probe when
 // codex moves).
 fn enum_spec_for(key: &str) -> Option<EnumSpec> {
@@ -98,6 +98,12 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// `supports_parallel_tool_calls` is kept although 0.153.4 dropped the field
 /// (it now parses as an ignored unknown key): guarding it still costs nothing
 /// and keeps a stored override honest for anyone pinned to an older codex.
+///
+/// `supports_experimental_context` is the only `ModelInfo` field 0.154.0 added
+/// (codex-acp 1.12.0 moves `@openai/codex` ^0.153.4 → ^0.154.0). It is strict:
+/// `supports_experimental_context = "yes"` earns `invalid type: string "yes",
+/// expected a boolean` and takes the WHOLE catalog down with it — probed
+/// against the 0.154.0 binary, same as the rest of this list.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -106,6 +112,7 @@ const BOOL_FIELDS: &[&str] = &[
     "supports_search_tool",
     "supports_image_detail_original",
     "supports_reasoning_summary_parameter",
+    "supports_experimental_context",
     "include_apps_usage_instructions",
     "include_plugin_usage_instructions",
     "include_skills_usage_instructions",
@@ -625,7 +632,7 @@ mod tests {
         assert_eq!(
             models.len(),
             11,
-            "snapshot should carry codex 0.153.4's catalog"
+            "snapshot should carry codex 0.154.0's catalog"
         );
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-6-astra")));
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-5.6-sol")));

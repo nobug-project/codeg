@@ -21,21 +21,29 @@ import { gitListAllBranches } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { GitBranchList } from "@/lib/types"
 
-interface AutomationBranchPickerProps {
+interface BranchPickerProps {
   /** Folder whose branches are listed; null disables the picker. */
   folderPath: string | null
-  /** Currently selected branch name ("" = the folder's default branch). */
+  /** Currently selected branch name ("" = the caller's own default). */
   value: string
   /** `isRemote` is true only when the pick came from the remote group, so the
    *  caller can record it as a remote branch (the name itself is the stripped
    *  leaf either way). */
   onChange: (branch: string, isRemote: boolean) => void
+  /** Trigger label while nothing is picked. */
   placeholder: string
+  /** The list's "no branch chosen" entry. What that means is the caller's
+   *  (an automation falls back to the folder's default branch, a task to the
+   *  project folder's checkout), so the wording comes from the caller too. */
+  defaultLabel: string
+  /** Native tooltip / accessible name of the trigger. */
+  title?: string
   disabled?: boolean
-  /** When false the remote-branch group is hidden. Used for shared_in_root
-   *  isolation, where a remote branch can't be checked out in the root tree
-   *  (the backend rejects the combination), so offering it would only let the
-   *  user build a config that fails at save/run. */
+  /** When false the remote-branch group is hidden. Used wherever a remote-only
+   *  branch cannot be the answer — shared_in_root isolation can't check one out
+   *  in the root tree (the backend rejects the combination), and a task's base
+   *  branch has to be a local branch the merge can land onto — so offering one
+   *  would only let the user build a config that fails later. */
   allowRemote?: boolean
 }
 
@@ -54,22 +62,24 @@ function stripRemote(branch: string): string {
 }
 
 /**
- * A select-only branch dropdown for the automation editor, styled after the
- * conversation composer's branch picker but with no checkout side effect — it
- * only sets a branch string. Lists local + remote branches for the chosen
- * folder, offers a "default branch" reset, and a free-form fallback so a
- * not-yet-created branch name can still be entered (preserving the old text
- * input's flexibility).
+ * A select-only branch dropdown, styled after the conversation composer's
+ * branch picker but with no checkout side effect — it only sets a branch
+ * string. Lists local + remote branches for the chosen folder, offers a reset
+ * to the caller's default, and a free-form fallback so a not-yet-created
+ * branch name can still be entered (preserving the old text input's
+ * flexibility).
  */
-export function AutomationBranchPicker({
+export function BranchPicker({
   folderPath,
   value,
   onChange,
   placeholder,
+  defaultLabel,
+  title,
   disabled,
   allowRemote = true,
-}: AutomationBranchPickerProps) {
-  const t = useTranslations("Automations")
+}: BranchPickerProps) {
+  const t = useTranslations("BranchPicker")
   const [open, setOpen] = useState(false)
   const [branchList, setBranchList] = useState<GitBranchList | null>(null)
   const [loading, setLoading] = useState(false)
@@ -145,6 +155,8 @@ export function AutomationBranchPicker({
           variant="outline"
           size="sm"
           disabled={disabled}
+          title={title}
+          aria-label={title}
           className="h-7 max-w-[16rem] gap-1.5 text-xs font-normal"
         >
           <GitBranch
@@ -168,7 +180,7 @@ export function AutomationBranchPicker({
       <PopoverContent align="start" className="w-72 overflow-hidden p-0">
         <Command className="rounded-2xl">
           <CommandInput
-            placeholder={t("branchSearchPlaceholder")}
+            placeholder={t("searchPlaceholder")}
             value={query}
             onValueChange={setQuery}
           />
@@ -182,7 +194,7 @@ export function AutomationBranchPicker({
               </div>
             ) : (
               <>
-                <CommandEmpty>{t("branchNone")}</CommandEmpty>
+                <CommandEmpty>{t("none")}</CommandEmpty>
                 <CommandGroup>
                   <CommandItem
                     value="__default__"
@@ -193,7 +205,7 @@ export function AutomationBranchPicker({
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1 truncate">
-                      {t("branchDefault")}
+                      {defaultLabel}
                     </span>
                     {!value ? (
                       <Check className="size-4 shrink-0" aria-hidden="true" />
@@ -211,13 +223,13 @@ export function AutomationBranchPicker({
                         aria-hidden="true"
                       />
                       <span className="min-w-0 flex-1 truncate">
-                        {t("branchUseCustom", { query: q })}
+                        {t("useCustom", { query: q })}
                       </span>
                     </CommandItem>
                   </CommandGroup>
                 ) : null}
                 {local.length > 0 ? (
-                  <CommandGroup heading={t("branchLocal")}>
+                  <CommandGroup heading={t("local")}>
                     {local.map((b) => (
                       <CommandItem
                         key={`local-${b}`}
@@ -240,7 +252,7 @@ export function AutomationBranchPicker({
                   </CommandGroup>
                 ) : null}
                 {remote.length > 0 ? (
-                  <CommandGroup heading={t("branchRemote")}>
+                  <CommandGroup heading={t("remote")}>
                     {remote.map((b) => {
                       const name = stripRemote(b)
                       return (

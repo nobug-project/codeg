@@ -22,6 +22,7 @@ import {
   getCachedSelectors,
   useAcpActions,
   useAcpEvent,
+  useConnectionStore,
 } from "@/contexts/acp-connections-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -84,12 +85,17 @@ import {
 } from "@/lib/api"
 import { isWindowedDetail } from "@/lib/turn-window"
 import {
+  hasTranscriptOverlay,
+  isOutOfTurnContentEvent,
+} from "@/lib/background-agent"
+import {
   flushRetryDelayMs,
   isConnectionReady,
   shouldQueueDirectSend,
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
-import { TurnBusyError } from "@/lib/turn-busy"
+import { TurnBusyError, isNoActiveTurnRejection } from "@/lib/turn-busy"
+import { toErrorMessage } from "@/lib/app-error"
 import {
   getConversationIdByExternalIdFromStore,
   getRuntimeSession,
@@ -100,6 +106,7 @@ import {
 import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
+  buildSteerPayload,
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
 } from "@/lib/prompt-draft"
@@ -120,6 +127,7 @@ import {
   lastUserPromptText,
   type SessionFailureAction,
 } from "@/lib/session-failures"
+import { userPromptHistory } from "@/lib/composer-history"
 import { contentBlocksFromUserMessage } from "@/lib/user-message-blocks"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
@@ -239,6 +247,9 @@ const ConversationTabView = memo(function ConversationTabView({
   groupId,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
+  // Composer-namespace copy for the queue row's click-to-insert outcomes
+  // (same keys the composer's own mid-turn send reports).
+  const tCmp = useTranslations("Folder.chat.messageInput")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -284,6 +295,7 @@ const ConversationTabView = memo(function ConversationTabView({
     removeOptimisticTurn,
     appendViewerUserTurn,
     completeTurn,
+    markOutOfTurnContent,
     refetchDetail,
     syncTurnMetadata,
     removeConversation,
@@ -295,6 +307,9 @@ const ConversationTabView = memo(function ConversationTabView({
     setSyncState,
   } = useConversationRuntimeActions()
   const acpActions = useAcpActions()
+  // Stable store handle, for event-time status reads that must not go through
+  // an effect-refreshed ref (see the out-of-turn subscriber below).
+  const connectionStore = useConnectionStore()
 
   // Stable runtime session key — set once at mount, never changes.
   // For new conversations this is a virtual (negative) ID; for existing
@@ -598,6 +613,11 @@ const ConversationTabView = memo(function ConversationTabView({
     // Drives cross-client viewer discovery: when another client is already
     // live on this conversation, attach to its connection instead of spawning.
     conversationId: dbConversationId ?? undefined,
+    // The auto-connect gate above is a WAIT, not an idle state: report it so the
+    // composer and the status bar can show the conversation is opening instead
+    // of an empty, connection-less composer. Scoped to the active tab — the
+    // status bar is global.
+    preparing: isActive && awaitingHistoricalSessionId,
     // A cross-group move / unsplit reparents this view (React remounts it)
     // while the tab stays open — that unmount must not tear the connection
     // down. See `isReparentUnmount` for why "still open" alone is too broad.
@@ -787,6 +807,15 @@ const ConversationTabView = memo(function ConversationTabView({
   // another turn while this client believes it is idle) don't spin one failed
   // send per round-trip.
   const lastFlushBounceAtRef = useRef(0)
+  // Whether a queued row's click-to-insert (`handleQueueSteer`) is mid-flight.
+  // The row STAYS in the queue for the whole round-trip — it only leaves once
+  // the backend confirms delivery — so without this the turn-end edge would
+  // hand the same row to the flush below while the insert is still settling:
+  // admitted against the ending turn AND re-sent as the next turn's prompt,
+  // i.e. the agent reads the same instruction twice. Holding the flush for one
+  // round-trip is enough, and cannot strand the queue: `handleQueueSteer`
+  // always clears this in a `finally`, which re-runs the flush effect.
+  const [queueSteerInFlight, setQueueSteerInFlight] = useState(false)
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -811,6 +840,9 @@ const ConversationTabView = memo(function ConversationTabView({
     // lifecycle reconnects — which, for a not-installed target, never happens.
     if (!connectionReady) return
     if (runtimeSyncState === "awaiting_persist") return
+    // A row being inserted into the (just-ended) turn is still queued; sending
+    // it now would deliver it twice. See `queueSteerInFlight`.
+    if (queueSteerInFlight) return
     if (msgQueue.length === 0) return
     // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
     // a just-bounced retry waits out the backoff window before re-sending.
@@ -837,7 +869,7 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length])
+  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlight])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
@@ -889,6 +921,49 @@ const ConversationTabView = memo(function ConversationTabView({
         )
       },
       [conn.connectionId, effectiveConversationId, appendViewerUserTurn]
+    )
+  )
+
+  // An agent can run a turn CODEG never started: CodeBuddy drains a finished
+  // background task by prompting itself, and streams a whole turn for it.
+  // `applyStreamingAction`'s out-of-turn guard drops that content because the
+  // `background_activity` overlay is supposed to own it — but that overlay only
+  // has a producer for Claude Code, so for every other agent the turn renders
+  // nowhere and the session looks frozen until it is reopened. The content IS
+  // on disk and the agent's own parser already reads it correctly, so flag the
+  // session and let the timeline offer a re-read.
+  //
+  // This runs per streamed token, so every step is O(1) and ordered cheapest
+  // first; the reducer also early-returns once the flag is set.
+  useAcpEvent(
+    useCallback(
+      (envelope: EventEnvelope) => {
+        if (!isOutOfTurnContentEvent(envelope)) return
+        if (envelope.connection_id !== conn.connectionId) return
+        // The same condition the guard drops on, read from the SAME place the
+        // guard read it. Not `connStatusRef`: that is refreshed in an effect,
+        // so it still says "connected" for any envelope that lands between the
+        // StatusChanged(prompting) dispatch and React committing — which is
+        // exactly the burst at the start of every turn, and would arm the pill
+        // on turns we started ourselves. `getConnection` reads the store the
+        // reducer just wrote, and subscribers fire after that write.
+        if (connectionStore.getConnection(tabId)?.status === "prompting") return
+        // Unknown agent (no connection bound yet) → no pill. A connection that
+        // is streaming content always carries its type, so this only degrades
+        // to today's behavior in a case that shouldn't arise.
+        if (conn.agentType == null || hasTranscriptOverlay(conn.agentType)) {
+          return
+        }
+        markOutOfTurnContent(effectiveConversationId)
+      },
+      [
+        conn.agentType,
+        conn.connectionId,
+        connectionStore,
+        tabId,
+        effectiveConversationId,
+        markOutOfTurnContent,
+      ]
     )
   )
 
@@ -1946,6 +2021,16 @@ const ConversationTabView = memo(function ConversationTabView({
   // and the action would silently do nothing.
   const composerAvailable = !isWelcomeMode && !acpLoadError
 
+  // Arrow-key history source: read lazily when the user actually steps into
+  // history, so streaming tokens neither recompute it nor re-render the panel.
+  const getSentHistory = useCallback(
+    () =>
+      userPromptHistory(
+        getTimelineTurns(effectiveConversationId).map((entry) => entry.turn)
+      ),
+    [effectiveConversationId]
+  )
+
   const messageListNode = (
     <GoalControlProvider value={goalControlValue}>
       <MessageListView
@@ -2031,8 +2116,49 @@ const ConversationTabView = memo(function ConversationTabView({
     [feedbackSteer]
   )
 
+  // Click-to-insert for a queued row: send THAT item into the running turn
+  // over the same live-feedback channel the composer's mid-turn dropdown uses.
+  // The block/text encoding is the shared `buildSteerPayload` — one call site,
+  // no policy here beyond the row's own lifecycle: success removes the row;
+  // the turn-end race leaves it queued so the auto-flush sends it with the
+  // next turn — never lost. Any other failure keeps the row untouched and
+  // surfaces the error.
+  const handleQueueSteer = useCallback(
+    async (id: string) => {
+      const item = msgQueue.find((m) => m.id === id)
+      if (!item) return
+      const payload = buildSteerPayload(item.draft)
+      // Nothing sendable in this row (no text, and no display text standing in
+      // for its attachments). Leave it alone: removing it would delete queued
+      // content — including whatever blocks it carries — on a button that
+      // promises to SEND it.
+      if (!payload) return
+      // Set before the first await so the flush effect above is already held
+      // when the turn-end edge lands mid-round-trip.
+      setQueueSteerInFlight(true)
+      try {
+        await feedbackSteer(payload.text, payload.blocks)
+        mqRemove(id)
+      } catch (err: unknown) {
+        if (isNoActiveTurnRejection(err)) {
+          // The turn ended mid-click — the queue flush will deliver it.
+          toast.info(tCmp("steerQueuedInstead"))
+          return
+        }
+        toast.error(
+          tCmp(feedback.channel === "pull" ? "steerNoteFailed" : "steerFailed"),
+          { description: toErrorMessage(err) }
+        )
+      } finally {
+        setQueueSteerInFlight(false)
+      }
+    },
+    [msgQueue, feedbackSteer, mqRemove, feedback.channel, tCmp]
+  )
+
   return (
     <ConversationShell
+      getSentHistory={getSentHistory}
       topBanner={
         <>
           <SessionConfigStaleBanner contextKey={tabId} />
@@ -2115,6 +2241,16 @@ const ConversationTabView = memo(function ConversationTabView({
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}
+      onQueueSteer={
+        // Same gate as the composer's mid-turn send, plus a turn actually in
+        // flight: a queued row can only be inserted into a RUNNING turn —
+        // idle sessions have the queue's own auto-flush for that.
+        feedback.featureEnabled &&
+        feedback.steerAvailable &&
+        connStatus === "prompting"
+          ? handleQueueSteer
+          : undefined
+      }
       editingItemId={mqEditingItemId}
       editingDraftText={editingQueueDraftText}
       editingDraftBlocks={editingQueueDraftBlocks}

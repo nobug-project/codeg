@@ -309,6 +309,7 @@ export function LiveTranscriptView({
           <PermissionDialog
             permission={pendingPermission}
             onRespond={onRespondPermission}
+            agentType={agentType}
           />
         </div>
       )}

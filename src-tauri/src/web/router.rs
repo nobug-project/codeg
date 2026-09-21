@@ -106,6 +106,14 @@ pub fn build_router(
             post(handlers::session_info::set_session_info_settings),
         )
         .route(
+            "/get_browser_tools_settings",
+            post(handlers::browser_tools::get_browser_tools_settings),
+        )
+        .route(
+            "/set_browser_tools_settings",
+            post(handlers::browser_tools::set_browser_tools_settings),
+        )
+        .route(
             "/get_chat_authoring_settings",
             post(handlers::chat_authoring::get_chat_authoring_settings),
         )
@@ -589,6 +597,60 @@ pub fn build_router(
             "/backup_discard_pending",
             post(handlers::backup::backup_discard_pending),
         )
+        // ─── Configuration sync ───
+        //
+        // The WebDAV half is runtime-agnostic. Local file transfer is the
+        // by-content pair: a browser has no path to name, and the payload is
+        // tens of KB, so it travels in the JSON body rather than through the
+        // upload-staging machinery above.
+        .route(
+            "/config_sync_get_settings",
+            post(handlers::config_sync::config_sync_get_settings),
+        )
+        .route(
+            "/config_sync_update_settings",
+            post(handlers::config_sync::config_sync_update_settings),
+        )
+        .route(
+            "/config_sync_get_state",
+            post(handlers::config_sync::config_sync_get_state),
+        )
+        .route(
+            "/config_sync_test_connection",
+            post(handlers::config_sync::config_sync_test_connection),
+        )
+        .route(
+            "/config_sync_upload_now",
+            post(handlers::config_sync::config_sync_upload_now),
+        )
+        .route(
+            "/config_sync_peek_remote",
+            post(handlers::config_sync::config_sync_peek_remote),
+        )
+        .route(
+            "/config_sync_download_apply",
+            post(handlers::config_sync::config_sync_download_apply),
+        )
+        .route(
+            "/config_sync_export_content",
+            post(handlers::config_sync::config_sync_export_content),
+        )
+        .route(
+            "/config_sync_peek_content",
+            post(handlers::config_sync::config_sync_peek_content),
+        )
+        .route(
+            "/config_sync_import_content",
+            post(handlers::config_sync::config_sync_import_content),
+        )
+        .route(
+            "/config_sync_list_rollbacks",
+            post(handlers::config_sync::config_sync_list_rollbacks),
+        )
+        .route(
+            "/config_sync_apply_rollback",
+            post(handlers::config_sync::config_sync_apply_rollback),
+        )
         .route(
             "/download_workspace_file",
             post(handlers::workspace_files::download_workspace_file),
@@ -804,6 +866,14 @@ pub fn build_router(
         .route(
             "/acp_clear_binary_cache",
             post(handlers::acp::acp_clear_binary_cache),
+        )
+        .route(
+            "/acp_scan_leaked_temp",
+            post(handlers::acp::acp_scan_leaked_temp),
+        )
+        .route(
+            "/acp_reclaim_leaked_temp",
+            post(handlers::acp::acp_reclaim_leaked_temp),
         )
         .route(
             "/acp_update_agent_preferences",
@@ -1096,6 +1166,19 @@ pub fn build_router(
             post(handlers::custom_skills::custom_delete_skills),
         )
         // ─── Office tools ───
+        // ─── Web-mode port bridge (dev servers on the host, shown in an iframe) ───
+        .route(
+            "/browser_bridge_status",
+            post(handlers::browser_bridge::browser_bridge_status),
+        )
+        .route(
+            "/browser_bridge_open",
+            post(handlers::browser_bridge::browser_bridge_open),
+        )
+        .route(
+            "/browser_bridge_close",
+            post(handlers::browser_bridge::browser_bridge_close),
+        )
         .route(
             "/officecli_detect",
             post(handlers::office_tools::officecli_detect),

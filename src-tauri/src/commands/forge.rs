@@ -966,6 +966,10 @@ pub async fn work_task_create_from_forge_core(
         deliverable: scenario
             .is_report()
             .then(|| crate::models::DELIVERABLE_REPORT.to_string()),
+        // A forge task's base is not the user's to pick here: a pull request
+        // brings its own (the review's base ref), and an issue starts from the
+        // project folder's checkout.
+        base_branch: None,
     };
     let task_draft = WorkTaskDraft {
         folder_id: draft.folder_id,

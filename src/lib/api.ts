@@ -18,6 +18,8 @@ import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  LeakedTempReclaim,
+  LeakedTempScan,
   AgentType,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
@@ -145,6 +147,9 @@ import type {
   AvailableTerminalShells,
   SystemLanguageSettings,
   SystemProxySettings,
+  CloseRequestPayload,
+  CloseWindowBehavior,
+  SystemCloseBehaviorSettingsView,
   SystemRenderingSettings,
   SystemAutostartSettings,
   SystemTerminalSettings,
@@ -501,6 +506,21 @@ export async function acpEnvDiagnostics(
 
 export async function acpClearBinaryCache(agentType: AgentType): Promise<void> {
   return getTransport().call("acp_clear_binary_cache", { agentType })
+}
+
+/** Read-only scan of the system temp dir for pre-isolation launch leftovers. */
+export async function acpScanLeakedTemp(): Promise<LeakedTempScan> {
+  return getTransport().call("acp_scan_leaked_temp", {})
+}
+
+/**
+ * Delete leaked temp artifacts. The backend re-validates every path
+ * immediately before deleting — this list is never trusted as-is.
+ */
+export async function acpReclaimLeakedTemp(
+  paths: string[]
+): Promise<LeakedTempReclaim> {
+  return getTransport().call("acp_reclaim_leaked_temp", { paths })
 }
 
 export async function acpDownloadAgentBinary(
@@ -1825,6 +1845,49 @@ export async function updateSystemAutostartSettings(
   settings: SystemAutostartSettings
 ): Promise<SystemAutostartSettings> {
   return getTransport().call("update_system_autostart_settings", { settings })
+}
+
+// --- Close window behavior ---
+
+/**
+ * Emitted when a close press needs an answer. Addressed to `main`, but the
+ * Tauri transport subscribes with `EventTarget::Any`, so every webview sharing
+ * the root layout still receives it — `CloseRequestDialog` gates on the window
+ * label rather than trusting the target.
+ */
+export const CLOSE_REQUEST_EVENT = "app://close-request"
+
+export async function getSystemCloseBehaviorSettings(): Promise<SystemCloseBehaviorSettingsView> {
+  return getTransport().call("get_system_close_behavior_settings")
+}
+
+export async function updateSystemCloseBehaviorSettings(
+  behavior: CloseWindowBehavior
+): Promise<SystemCloseBehaviorSettingsView> {
+  return getTransport().call("update_system_close_behavior_settings", {
+    behavior,
+  })
+}
+
+/**
+ * Answer an open close prompt. The backend holds a "a prompt is up" flag that
+ * only this call clears, so every dismissal path — including Cancel and the
+ * Esc key — has to reach it or the close button goes dead for the session.
+ */
+export async function resolveCloseRequest(
+  action: "minimize" | "exit" | "cancel",
+  remember: boolean
+): Promise<void> {
+  return getTransport().call("resolve_close_request", { action, remember })
+}
+
+export async function listenCloseRequest(
+  handler: (payload: CloseRequestPayload) => void
+): Promise<() => void> {
+  return getTransport().subscribe<CloseRequestPayload>(
+    CLOSE_REQUEST_EVENT,
+    handler
+  )
 }
 
 // --- Logging ---
@@ -4973,6 +5036,11 @@ export type CodegMcpServiceState =
 export interface CodegMcpToolGroup {
   key: string
   enabled: boolean
+  /** The group this one lives inside, when it lives inside one
+   * (`browser_eval` inside `browser`). Sent by the backend so the two
+   * surfaces that render this list cannot disagree about which switch gates
+   * which. Absent for a group proper. */
+  requires?: string | null
 }
 
 /** Mirror of Rust `CodegMcpServiceStatus`. */
@@ -5095,6 +5163,32 @@ export async function setSessionInfoSettings(
   settings: SessionInfoSettings
 ): Promise<SessionInfoSettings> {
   return getTransport().call("set_session_info_settings", { settings })
+}
+
+// ─── Built-in browser tools settings ───────────────────────────────────────
+
+/** Mirror of Rust `BrowserToolsSettings` (default OFF). Whether agents get
+ *  `browser_list_tabs` / `browser_snapshot` at all; which individual page they
+ *  may read is a separate, per-tab decision made from the tab's own toolbar. */
+export interface BrowserToolsSettings {
+  enabled: boolean
+  /** Whether `browser_eval` exists: an agent running its own code on a shared
+   *  page. Off by default and separate from `enabled`, because everything else
+   *  in the group is a named act a person sharing a tab can picture and this
+   *  is not one of them. Never in force with `enabled` off — the backend drops
+   *  it, so a stale `true` cannot outlive the switch above it. Even on, every
+   *  individual snippet is shown to the person and approved on its own. */
+  eval: boolean
+}
+
+export async function getBrowserToolsSettings(): Promise<BrowserToolsSettings> {
+  return getTransport().call("get_browser_tools_settings")
+}
+
+export async function setBrowserToolsSettings(
+  settings: BrowserToolsSettings
+): Promise<BrowserToolsSettings> {
+  return getTransport().call("set_browser_tools_settings", { settings })
 }
 
 // ─── Create-from-chat (chat authoring) settings ────────────────────────────

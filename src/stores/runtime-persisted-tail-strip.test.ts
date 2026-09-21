@@ -77,6 +77,7 @@ function seed(turns: MessageTurn[]) {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   })
   useConversationRuntimeStore.setState({ byConversationId: next })

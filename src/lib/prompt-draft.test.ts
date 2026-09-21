@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest"
 import type { PromptDraft, PromptInputBlock } from "@/lib/types"
 
 import {
+  buildSteerPayload,
+  draftRidesBlocks,
   extractUserImagesFromDraft,
   extractUserResourcesFromDraft,
 } from "./prompt-draft"
@@ -26,6 +28,55 @@ const textResource: PromptInputBlock = {
   text: "hi",
   blob: null,
 }
+
+describe("buildSteerPayload", () => {
+  const text = (s: string): PromptInputBlock => ({ type: "text", text: s })
+
+  it("joins plain-text blocks and rides no block list", () => {
+    const d: PromptDraft = {
+      blocks: [text(" go "), text("left")],
+      displayText: "ignored",
+    }
+    expect(buildSteerPayload(d)).toEqual({ text: "go \nleft" })
+  })
+
+  it("returns null when there is no text at all", () => {
+    expect(buildSteerPayload({ blocks: [], displayText: "" })).toBeNull()
+    expect(
+      buildSteerPayload({ blocks: [text("   ")], displayText: "" })
+    ).toBeNull()
+  })
+
+  it("rides the full block list and display text once a non-text block is present", () => {
+    const blocks = [text("look"), grokImageResource]
+    const d: PromptDraft = { blocks, displayText: "look [附件 1]" }
+    expect(buildSteerPayload(d)).toEqual({
+      text: "look [附件 1]",
+      blocks,
+    })
+  })
+
+  it("attaches only a text resource too (it is not a text block)", () => {
+    const blocks = [text("note"), textResource]
+    const d: PromptDraft = { blocks, displayText: "note chip" }
+    expect(buildSteerPayload(d)?.blocks).toBe(blocks)
+  })
+
+  // The affordance gate (a pull-channel session can't carry blocks) reads the
+  // same predicate the encoder does, so the two can't disagree about which
+  // drafts need the native wire.
+  it("agrees with draftRidesBlocks about what needs the block wire", () => {
+    const plain: PromptDraft = { blocks: [text("go")], displayText: "go" }
+    const attached: PromptDraft = {
+      blocks: [text("look"), grokImageResource],
+      displayText: "look",
+    }
+    expect(draftRidesBlocks(plain)).toBe(false)
+    expect(buildSteerPayload(plain)?.blocks).toBeUndefined()
+    expect(draftRidesBlocks(attached)).toBe(true)
+    expect(buildSteerPayload(attached)?.blocks).toBe(attached.blocks)
+  })
+})
 
 describe("extractUserImagesFromDraft", () => {
   it("includes native image blocks", () => {

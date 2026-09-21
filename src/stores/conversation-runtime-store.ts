@@ -251,6 +251,17 @@ export interface ConversationRuntimeSession {
   // row and the single-flight guard).
   loadingOlderTurns: boolean
 
+  // The wire carried turn content while this session was NOT prompting, and
+  // nothing rendered it. `applyStreamingAction`'s out-of-turn guard drops such
+  // content because the `background_activity` overlay is supposed to own that
+  // render path — but that overlay only has a producer for Claude Code (see
+  // `hasTranscriptOverlay`), so for every other agent the content is simply
+  // lost until the transcript is re-read. It IS on disk and the agent's parser
+  // renders it correctly, so the fix is a re-read; this flag drives the pill
+  // that offers one. Cleared by FETCH_DETAIL_SUCCESS — any successful load has
+  // just re-parsed the transcript, so whatever was missing is now covered.
+  pendingOutOfTurnContent: boolean
+
   // Monotonic counter bumped on every SUCCESSFUL older-page prepend. The
   // virtualized thread derives virtua's `shift` flag from this explicit
   // signal instead of guessing from item keys: a window starting mid-way
@@ -314,6 +325,10 @@ type Action =
        * fork actually invalidated.
        */
       dropLiveTurnIds?: string[]
+    }
+  | {
+      type: "MARK_OUT_OF_TURN_CONTENT"
+      conversationId: number
     }
   | {
       type: "LOAD_OLDER_TURNS_START"
@@ -493,6 +508,7 @@ function createEmptySession(
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
 }
@@ -1925,6 +1941,12 @@ function reducer(
         detail: action.detail,
         detailLoading: false,
         detailError: null,
+        // This response re-parsed the transcript, so any out-of-turn content
+        // the wire dropped is either in `detail.turns` now or never persisted.
+        // Either way the pill has nothing left to offer. Deliberately NOT
+        // cleared on FETCH_DETAIL_ERROR: a failed load covered nothing, and
+        // the pill is the only way back to that content.
+        pendingOutOfTurnContent: false,
         externalId: nextExternalId ?? current.externalId,
         sessionStats: action.detail.session_stats ?? current.sessionStats,
         backgroundTurns: nextBackgroundTurns,
@@ -1967,6 +1989,18 @@ function reducer(
         detailLoading: false,
         detailError: action.error,
       }))
+
+    // Session-existence guarded for the same reason as the LOAD_OLDER cases
+    // below: an event for a conversation whose tab already closed must not
+    // resurrect a ghost session just to hang a pill on it.
+    case "MARK_OUT_OF_TURN_CONTENT": {
+      const current = state.byConversationId.get(action.conversationId)
+      if (!current || current.pendingOutOfTurnContent) return state
+      return updateSessionInState(state, action.conversationId, (session) => ({
+        ...session,
+        pendingOutOfTurnContent: true,
+      }))
+    }
 
     // The three LOAD_OLDER/PREPEND cases guard on session existence instead
     // of using the create-if-missing update helper: a page response landing
@@ -2530,6 +2564,12 @@ function reducer(
         batchBoundaryIndex: from.batchBoundaryIndex ?? to.batchBoundaryIndex,
         batchBoundaryPrefixHash:
           from.batchBoundaryPrefixHash ?? to.batchBoundaryPrefixHash,
+        // OR, like the other "something is still outstanding" flags above: the
+        // draft key is the one the panel arms, but neither side's unrendered
+        // content stops being unrendered because the row got a real id, and
+        // the plain spread would silently drop the target's.
+        pendingOutOfTurnContent:
+          from.pendingOutOfTurnContent || to.pendingOutOfTurnContent,
       }
 
       const nextByConversationId = new Map(state.byConversationId)
@@ -2672,6 +2712,12 @@ export interface RuntimeActions {
    * with `turns_offset > 0`; single-flight per session.
    */
   loadOlderTurns: (conversationId: number) => void
+  /**
+   * Record that turn content reached the wire while this session was not
+   * prompting and was dropped unrendered (see `pendingOutOfTurnContent`).
+   * Idempotent and O(1) once set — it is called per streamed token.
+   */
+  markOutOfTurnContent: (conversationId: number) => void
   /**
    * Poll a passively-viewed conversation's persisted detail into sync after its
    * turn completed on another client. No-op unless the session is open and this
@@ -3884,10 +3930,15 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     }
   }
 
+  const markOutOfTurnContent = (conversationId: number): void => {
+    dispatch({ type: "MARK_OUT_OF_TURN_CONTENT", conversationId })
+  }
+
   const actions: RuntimeActions = {
     fetchDetail,
     refetchDetail,
     loadOlderTurns,
+    markOutOfTurnContent,
     syncViewerDetail,
     syncTurnMetadata,
     completeTurn: (conversationId, liveMessage) => {
