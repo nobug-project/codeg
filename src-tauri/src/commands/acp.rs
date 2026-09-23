@@ -7517,7 +7517,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.21.3",
+        _ => "hermes-agent@0.21.4",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -9415,6 +9415,43 @@ async fn run_cursor_probe(
     Ok(stdout)
 }
 
+/// The exact phrase `cursor-agent status` prints when it HAS a stored login but
+/// could not use it: `gatherStatusInfo` calls `getMe` with the access token and
+/// falls into this branch when that call throws, while still reporting
+/// `isAuthenticated: true` (it decides that from token presence alone, never
+/// from the token's `exp`).
+///
+/// Matched as a literal because it is one: the CLI emits these strings in
+/// English regardless of locale, and they are what carries the difference
+/// between "signed in" and "signed in with a credential that no longer works".
+const CURSOR_STATUS_UNVERIFIED_MARKER: &str = "unable to fetch user details";
+
+/// Whether the login `cursor-agent status` reports actually worked against
+/// Cursor's backend — see [`crate::acp::types::CursorAuthStatus::credential_verified`]
+/// for why the two are not the same question.
+///
+/// Deliberately conservative: only the CLI's own "I could not reach the
+/// backend with this token" branch counts as unverified. Every other shape —
+/// user details present, details missing for some other reason, a field we do
+/// not recognize — is left as verified, so an unfamiliar status output cannot
+/// invent a login problem the user does not have.
+fn cursor_credential_verified(status: &serde_json::Value) -> Option<bool> {
+    let authenticated = status
+        .get("isAuthenticated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !authenticated {
+        // Nothing to verify: the panel already renders this as "not signed in".
+        return None;
+    }
+    let message = status
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    Some(!message.contains(CURSOR_STATUS_UNVERIFIED_MARKER))
+}
+
 pub(crate) async fn acp_cursor_auth_status_core(
     db: &AppDatabase,
     api_key: Option<String>,
@@ -9429,6 +9466,7 @@ pub(crate) async fn acp_cursor_auth_status_core(
             membership: None,
             error: None,
             binary_path: None,
+            credential_verified: None,
         };
     }
     let extra_env = cursor_probe_env(db, api_key.as_deref()).await;
@@ -9467,6 +9505,7 @@ pub(crate) async fn acp_cursor_auth_status_core(
                         membership: get_str(&["membershipType", "membership", "plan"]),
                         error: None,
                         binary_path: binary_path.clone(),
+                        credential_verified: cursor_credential_verified(&v),
                     }
                 }
                 Err(e) => crate::acp::types::CursorAuthStatus {
@@ -9477,6 +9516,7 @@ pub(crate) async fn acp_cursor_auth_status_core(
                     membership: None,
                     error: Some(format!("unexpected status output: {e}")),
                     binary_path: binary_path.clone(),
+                    credential_verified: None,
                 },
             }
         }
@@ -9488,6 +9528,7 @@ pub(crate) async fn acp_cursor_auth_status_core(
             membership: None,
             error: Some(err),
             binary_path,
+            credential_verified: None,
         },
     }
 }
@@ -9758,7 +9799,7 @@ fn apply_cline_launch_env(config_json: Option<&str>, merged: &mut BTreeMap<Strin
     //     freezes a selector these three are entitled to use.
     //
     // Both are cleared by writing an EMPTY value, which the spawn layer turns
-    // into `env_remove` (see the codeg convention in vendor/sacp-tokio) — so
+    // into `env_remove` (see the codeg convention in `acp::agent_process`) — so
     // this strips an inherited value rather than merely declining to add one.
     // Removal, not `""`, is what the agent needs: `??` does not fall through on
     // an empty string, so an actually-empty `CLINE_PROVIDER` would become the
@@ -16530,6 +16571,56 @@ wire_api = "chat"
         assert_eq!(models[3].label, "Fable 5 1M Thinking (NO ZDR)");
     }
 
+    // `cursor-agent status` reports a login from token PRESENCE alone, so it
+    // keeps saying "authenticated" long after the access token has aged out —
+    // while `cursor-agent acp` refuses every `session/new` for exactly that
+    // token. The one thing in the status output that tells them apart is the
+    // `getMe` branch, and the panel's card is read off it.
+    #[test]
+    fn cursor_credential_verified_separates_a_stored_login_from_a_working_one() {
+        // Real shape when the token still works.
+        let working = serde_json::json!({
+            "status": "authenticated",
+            "isAuthenticated": true,
+            "hasAccessToken": true,
+            "hasRefreshToken": true,
+            "userInfo": { "email": "itpkcn@gmail.com" }
+        });
+        assert_eq!(cursor_credential_verified(&working), Some(true));
+
+        // Real shape when it does not: `isAuthenticated` is STILL true.
+        let expired = serde_json::json!({
+            "status": "authenticated",
+            "isAuthenticated": true,
+            "hasAccessToken": true,
+            "hasRefreshToken": true,
+            "message": "Logged in (unable to fetch user details)"
+        });
+        assert_eq!(cursor_credential_verified(&expired), Some(false));
+
+        // The CLI's other "no email" branch means `getMe` SUCCEEDED; it must
+        // not be read as a broken credential.
+        let no_details = serde_json::json!({
+            "status": "authenticated",
+            "isAuthenticated": true,
+            "message": "Logged in (user details not available)"
+        });
+        assert_eq!(cursor_credential_verified(&no_details), Some(true));
+
+        // Nothing to verify — the card already says "not signed in".
+        for absent in [
+            serde_json::json!({ "status": "unauthenticated", "isAuthenticated": false }),
+            serde_json::json!({
+                "status": "partially-authenticated",
+                "isAuthenticated": false,
+                "message": "Partially authenticated (missing refresh token)"
+            }),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(cursor_credential_verified(&absent), None);
+        }
+    }
+
     #[test]
     fn parse_cursor_models_tolerates_ansi_markers_and_bare_ids() {
         // ANSI SGR + a leading list marker + a bare-id line with no label.
@@ -16816,7 +16907,7 @@ wire_api = "chat"
     // either one can be the spec that actually lands.
     #[test]
     fn the_latest_spec_still_names_the_package_downstream_readers_key_off() {
-        let (latest, pinned) = npm_install_attempts("hermes-agent@0.21.3", None, true).unwrap();
+        let (latest, pinned) = npm_install_attempts("hermes-agent@0.21.4", None, true).unwrap();
         assert_eq!(latest, "hermes-agent@latest");
         assert!(npm_package_requires_scripts(&latest));
         assert!(npm_package_requires_scripts(&pinned.unwrap()));
@@ -18284,7 +18375,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.21.3")
+                    Some("hermes-agent@0.21.4")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -18896,7 +18987,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.3", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.4", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -18908,7 +18999,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.21.3",
+            "hermes-agent@0.21.4",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

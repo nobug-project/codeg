@@ -66,6 +66,7 @@ import type {
   SessionConfigKindInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
+  SessionNotice,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
   PromptCapabilitiesInfo,
@@ -75,6 +76,7 @@ import type {
 } from "@/lib/types"
 import {
   dismissSessionFailures,
+  sessionFailureFromNotice,
   hasSettleableRetryIncident,
   mergeSessionFailures,
   settleSessionFailures,
@@ -471,6 +473,16 @@ type Action =
       type: "SESSION_FAILURE"
       contextKey: string
       record: SessionFailureRecord
+    }
+  | {
+      // One ACP Session Notice (`session_notice` event). NOT an upsert — the
+      // notice has no id or revision; the reducer synthesizes a record for the
+      // `warning`/`error` levels only, so the banner keeps the role the AIR
+      // advisory lane filled before notices outranked it. `info` changes no
+      // state at all (it is toast-only).
+      type: "SESSION_NOTICE"
+      contextKey: string
+      notice: SessionNotice
     }
   | {
       // One AIR async-task delta (`async_task` event). PARTIAL — merged into
@@ -2719,6 +2731,26 @@ function connectionsReducer(
       return next
     }
 
+    case "SESSION_NOTICE": {
+      // The toast is raised at the event site; this arm only mirrors the
+      // `warning`/`error` levels into the failure table so the banner keeps
+      // the role the AIR advisory lane filled before notices outranked it.
+      // The revision has to be derived from the CURRENT table, which is why
+      // the record is synthesized here rather than by the caller.
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const record = sessionFailureFromNotice(
+        conn.sessionFailures,
+        action.notice
+      )
+      if (!record) return state
+      const merged = upsertSessionFailure(conn.sessionFailures, record)
+      if (merged === conn.sessionFailures) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, sessionFailures: merged })
+      return next
+    }
+
     case "ASYNC_TASK": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
@@ -4373,6 +4405,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // and reaches the sidebar via `conversation://changed`. Do not flush
           // the streaming queue: this can arrive mid-turn.
           break
+        case "transcript_rolled_over":
+          // Backend re-points conversation.external_id after Claude `/clear`.
+          // Sidebar converges via `conversation://changed`; do not reconnect.
+          break
         case "conversation_linked":
           // Backend just bound (or reaffirmed) the connection's DB conversation
           // row. Phase 3a frontend pre-creates rows for new-tab sends so this
@@ -4532,6 +4568,37 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           break
         }
+        case "session_notice": {
+          // ACP Session Notice — a live advisory, not a record. The toast is
+          // the primary surface (it is what "fire-and-forget" wants, and it is
+          // what replaces the `**bold label:**` transcript line these used to
+          // be folded into); the reducer additionally mirrors `warning`/`error`
+          // into the failure table so the banner keeps the role the AIR
+          // advisory lane filled before notices outranked it.
+          //
+          // The text is adapter-authored English and is shown verbatim, the
+          // same way `SessionFailureRecord.title` already is — localizing it
+          // is not possible without re-authoring every adapter's vocabulary.
+          const body = e.notice.description
+            ? `${e.notice.title} — ${e.notice.description}`
+            : e.notice.title
+          if (e.notice.severity === "error") {
+            toast.error(body)
+          } else if (e.notice.severity === "warning") {
+            toast.warning(body)
+          } else {
+            // Everything else, INCLUDING an unrecognized future level: a
+            // notice codeg cannot grade is still one the user should see, and
+            // `info` is the level that degrades most gracefully.
+            toast.info(body)
+          }
+          dispatch({
+            type: "SESSION_NOTICE",
+            contextKey,
+            notice: e.notice,
+          })
+          break
+        }
         case "async_task": {
           // JetBrains AIR async-task delta (claude only) — Claude's background
           // shells / workflows / monitors. Merged into the connection's task
@@ -4669,6 +4736,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 return t("backendErrors.mcpRejectedByAgent", {
                   agent: agentLabel,
                   message: e.message,
+                })
+              // The agent refused to OPEN a session for want of a credential.
+              // Deliberately drops the agent's own wording: cursor-agent's
+              // says to run `agent login`, which is not a command that exists
+              // (the binary is `cursor-agent`, and codeg's managed copy is not
+              // on PATH) — so echoing it sends the user somewhere they cannot
+              // go. The agent's settings panel is where the real command, and
+              // the API-key alternative, live. The raw refusal is not lost —
+              // it is still `e.message` — so an agent whose text turns out to
+              // be worth showing can be surfaced here without a backend change.
+              case "agent_auth_required":
+                return t("backendErrors.agentAuthRequired", {
+                  agent: agentLabel,
                 })
               case "sdk_not_installed":
                 return t("blocked.sdkMissing", { agent: agentLabel })

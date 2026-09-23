@@ -52,6 +52,8 @@
       "science": "科学研究",
       "office_tools": "Officeツール",
       "skill_packs": "スキルパック",
+      "collaboration": "コラボレーション",
+      "browser": "ブラウザ",
       "quick_messages": "クイックメッセージ",
       "logs": "実行ログ"
     }
@@ -862,7 +864,11 @@
       "authNotInstalled": "cursor-agent が未インストールです",
       "authLoggedIn": "ログイン済み",
       "authNotLoggedIn": "未ログイン",
+      "authUnverified": "ログイン済み（資格情報を検証できません）",
+      "authUnverifiedHint": "cursor-agent にログイン情報は残っていますが、たった今 Cursor に対して使用できませんでした。通常はセッションの期限切れです。再ログインするまでセッションは「Authentication required」で失敗します。この CLI はブラウザログインを自動更新できません。",
+      "authUnverifiedHintApiKey": "cursor-agent に API キーは保存されていますが、Cursor がたった今それを拒否しました。失効・期限切れ・入力ミスのいずれかが大半です。下で有効なキーを保存するまで、セッションは「Authentication required」で失敗します。",
       "loginHint": "ターミナルで次のコマンドを実行して Cursor アカウントにログイン（ブラウザが開きます）し、完了後に更新を押してください：",
+      "loginHintRemote": "cursor-agent がインストールされている codeg ホスト側で実行してください（この端末ではありません）。完了後に更新を押します。そのホストには通常開けるブラウザがないため、NO_OPEN_BROWSER=1 を付けて実行してください。代わりにサインイン URL が表示されるので、自分のブラウザで開きます。無人のサーバーでは上の方式を API キーに切り替えてください。",
       "apiKeyLabel": "Cursor API キー",
       "apiKeyPlaceholder": "cursor.com/dashboard で取得",
       "apiKeyHint": "CURSOR_API_KEY —— Cursor ダッシュボードのアカウントキー。ヘッドレス/サーバー環境でブラウザログインの代わりに使用します。サードパーティや OpenAI のキーではありません。",
@@ -1706,9 +1712,9 @@
   "GeneralSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "一般",
-    "sectionDescription": "デフォルトターミナル、レンダリング高速化、通知と通知音、マルチエージェント委譲などの共通設定をここで一括管理します。",
+    "sectionDescription": "デフォルトターミナル、レンダリング高速化、ウィンドウを閉じたときの動作、通知と通知音などの共通設定をここで一括管理します。",
     "terminalTitle": "デフォルトターミナル",
-    "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開くときに使用するシェルを選択します。エージェントが codeg にコマンドライン全体の実行を依頼するときにも使われます。",
+    "terminalDescription": "codeg が新しいターミナルタブを開くとき、およびエージェントに代わってコマンドライン全体を実行するときに使うシェルを選択します。独自のシェルを持つエージェント（Codex、Claude Code など）は自分のプロセス内でコマンドを実行するため、この設定は届きません。",
     "terminalSystemDefault": "システムデフォルト",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1731,6 +1737,10 @@
     "restartNow": "今すぐ再起動",
     "restartFailed": "再起動に失敗しました: {message}",
     "loadFailed": "読み込みに失敗しました: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "コラボレーション",
+    "sectionDescription": "エージェント同士の連携と、会話の中から使える codeg 自身のツールの範囲を設定します。"
   },
   "LoginPage": {
     "documentTitle": "ログイン - codeg",
@@ -2804,6 +2814,11 @@
       "linkedFolder": "リンク済みフォルダー",
       "moreActions": "その他のアクション",
       "copyPath": "パスをコピー",
+      "copy": "コピー",
+      "copyRelativePath": "相対パス",
+      "copyAbsolutePath": "絶対パス",
+      "copyFileItself": "ファイル本体",
+      "copyDirectoryItself": "フォルダ本体",
       "upload": "ファイル/フォルダをアップロード",
       "download": "ファイルをダウンロード",
       "downloadAsZip": "ZIP としてダウンロード",
@@ -2841,7 +2856,9 @@
         "downloadFailed": "{name} のダウンロードに失敗しました",
         "downloadSaved": "{name} をダウンロードしました",
         "pathCopied": "パスをコピーしました",
-        "copyPathFailed": "パスのコピーに失敗しました"
+        "copyPathFailed": "パスのコピーに失敗しました",
+        "fileCopied": "{name} をコピーしました",
+        "copyFileFailed": "{name} のコピーに失敗しました"
       },
       "createDialog": {
         "newFile": "新規ファイル",
@@ -3013,6 +3030,7 @@
           "turnFailedMaxTurnRequests": "{agent} がこのターンで許可された最大リクエスト数に達しました。",
           "turnFailedUnknown": "{agent} が不明な停止理由でターンを終了しました。",
           "turnFailedAuthRequired": "{agent} はこのターンを実行する前に再度のサインインを必要としています。設定からサインインしてから、メッセージを送り直してください。",
+          "agentAuthRequired": "{agent} はセッションを開始できませんでした。使用可能な認証情報がありません。設定 → エージェント → {agent} で再度サインインしてから、この会話を開き直してください。",
           "grokModelSwitchIncompatibleAgent": "{agent} は既存の会話ではこのモデルに切り替えられません。新しいセッションを開始して使用してください。",
           "turnFailedEmpty": "{agent} は応答を生成せずにターンを終了しました。",
           "turnFailedEmptyProtocol": "{agent} の出力を codeg が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
@@ -3494,6 +3512,7 @@
             "child_max_turn_requests": "サブエージェント: 要求上限",
             "child_empty": "サブエージェント応答なし",
             "child_auth_required": "サブエージェント要サインイン",
+            "child_rejected": "サブエージェント: 要求拒否",
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク"
           }
@@ -3818,6 +3837,7 @@
         "compacted": "コンテキストを圧縮しました",
         "compactedTokens": "コンテキストを圧縮 · {before} → {after} トークン",
         "failed": "コンテキストの圧縮に失敗しました",
+        "summary": "要約",
         "triggerManual": "手動で実行",
         "triggerAutomatic": "自動で実行"
       },
@@ -5024,6 +5044,7 @@
   "BrowserSettings": {
     "title": "内蔵ブラウザ",
     "description": "会話、ツールの結果、ターミナルから開いたウェブページを、アプリを離れずにファイルの隣のタブとして表示できます。",
+    "descriptionWeb": "ブラウザセッションでは、ウェブページは今使っているブラウザで開きます。例外は codeg ホストで動いているサーバーで、ここのタブに転送されます。以下は、その場合でも効く設定です。",
     "defaultTargetTitle": "リンクを開く場所",
     "defaultTargetHint": "発生元ごとに設定します。⌘/Ctrl を押しながらクリックすると、その一回だけもう一方で開きます。",
     "sourceTranscript": "会話メッセージ",
@@ -5063,6 +5084,7 @@
     "downloadsHint": "ページからダウンロードしたファイルは {dir} に保存されます。自動的に開かれることはなく、既存のファイルを上書きしません。",
     "rulesTitle": "サイトルール",
     "rulesHint": "サイトごとに設定: 常に内蔵ブラウザ、常にシステムブラウザ、またはブロック。パターンはホスト名、*.example.com、* のいずれかで、:ポートを付けられます。最も具体的な一致が優先されます。",
+    "rulesHintWeb": "サイトごとに設定: ブロック。ブラウザセッションでは、リンクをどこで開くかは選べません。パターンはホスト名、*.example.com、* のいずれかで、:ポートを付けられます。最も具体的な一致が優先されます。",
     "serviceOpenTitle": "ローカルサーバー",
     "serviceOpenHint": "ターミナルで起動したサーバーがアドレスを表示したら、ブラウザータブで開きます。このマシン上のアドレスのみ、かつ実際に待ち受けている場合だけです。",
     "serviceOpenOff": "何もしない",
@@ -6276,6 +6298,7 @@
       "copied": "アドレスをコピーしました",
       "unreachableTitle": "ブリッジポートに到達できません",
       "unreachableHint": "codeg サーバーはこのページを {origin} で公開していますが、お使いのブラウザから到達できません。そのポートを公開する（CODEG_BRIDGE_PORTS を参照）か CODEG_BRIDGE_PUBLIC_HOST を設定してください。codeg を HTTPS で提供している場合は、ブリッジポートにも HTTPS が必要です。",
+      "unreachableHostHint": "codeg のサーバーはこのページを {origin} に置きましたが、ブラウザから到達できません。そのホスト名が codeg サーバーに解決され、前段のプロキシを通り抜ける必要があります。ワイルドカードの DNS レコードとワイルドカードの vhost を用意してください（CODEG_BRIDGE_HOST_PATTERN を参照）。",
       "errorTitle": "このページはここに表示できません"
     },
     "download": {
