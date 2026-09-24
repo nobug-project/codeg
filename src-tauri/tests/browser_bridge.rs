@@ -2,7 +2,8 @@
 //! real listeners on loopback, a real upstream standing in for a dev server,
 //! and a real WebSocket through both.
 
-use std::sync::OnceLock;
+use std::future::Future;
+use std::sync::{LazyLock, OnceLock};
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -26,6 +27,31 @@ fn configure_once() {
             reserved: vec![RESERVED_PORT],
         }));
     });
+}
+
+/// Runs `task` on a runtime that lasts as long as the process, the way
+/// codeg's own does. What a `#[tokio::test]` spawns stops when its test
+/// ends, but the bridge's table of listeners is process-wide: a listener
+/// bound from inside a test would stay in it afterwards, dead, under its
+/// target port — and that port, its upstream's, would go back to the OS,
+/// which may hand it to a later test's upstream, whose `open` is then given
+/// the dead listener. Upstreams and listeners are started here instead.
+async fn on_process_runtime<T: Send + 'static>(
+    task: impl Future<Output = T> + Send + 'static,
+) -> T {
+    static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    });
+    RUNTIME.spawn(task).await.unwrap()
+}
+
+/// `browser_bridge::open` from that runtime, as codeg's API handler calls it
+/// from its own: the listener it binds is served where it was bound.
+async fn open(target_port: u16, tab_id: &'static str) -> Result<BridgeGrant, BridgeError> {
+    on_process_runtime(browser_bridge::open(target_port, tab_id, None)).await
 }
 
 /// A loopback server standing in for a dev server. Echoes the request
@@ -109,12 +135,15 @@ async fn spawn_upstream() -> u16 {
         .route("/redirect", get(redirect))
         .route("/echo", post(echo))
         .route("/ws", get(ws));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    port
+    on_process_runtime(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        port
+    })
+    .await
 }
 
 fn client() -> reqwest::Client {
@@ -150,7 +179,7 @@ fn base(grant: &BridgeGrant) -> String {
 async fn entry_sets_the_cookie_and_redirects_to_the_page() {
     configure_once();
     let upstream = spawn_upstream().await;
-    let grant = browser_bridge::open(upstream, "tab-entry", None).await.unwrap();
+    let grant = open(upstream, "tab-entry").await.unwrap();
     assert_eq!(grant.target_port, upstream);
     assert_ne!(port_of(&grant), 0);
 
@@ -246,7 +275,7 @@ async fn entry_sets_the_cookie_and_redirects_to_the_page() {
 async fn requests_need_this_listeners_cookie() {
     configure_once();
     let upstream = spawn_upstream().await;
-    let grant = browser_bridge::open(upstream, "tab-cookie", None).await.unwrap();
+    let grant = open(upstream, "tab-cookie").await.unwrap();
     let url = format!("{}/hello", base(&grant));
 
     // No cookie, a wrong value, another listener's name: all refused before
@@ -320,7 +349,7 @@ async fn requests_need_this_listeners_cookie() {
 async fn only_the_pages_own_requests_pass() {
     configure_once();
     let upstream = spawn_upstream().await;
-    let grant = browser_bridge::open(upstream, "tab-initiator", None).await.unwrap();
+    let grant = open(upstream, "tab-initiator").await.unwrap();
     let url = format!("{}/hello", base(&grant));
     let send = |site: Option<&'static str>, origin: Option<String>| {
         let mut request = client().get(&url).header(header::COOKIE, cookie_for(&grant));
@@ -382,7 +411,7 @@ async fn only_the_pages_own_requests_pass() {
 async fn redirects_and_bodies_pass_through() {
     configure_once();
     let upstream = spawn_upstream().await;
-    let grant = browser_bridge::open(upstream, "tab-redirect", None).await.unwrap();
+    let grant = open(upstream, "tab-redirect").await.unwrap();
 
     let response = client()
         .get(format!("{}/redirect", base(&grant)))
@@ -442,7 +471,7 @@ async fn redirects_and_bodies_pass_through() {
 async fn websockets_are_bridged_with_their_subprotocol() {
     configure_once();
     let upstream = spawn_upstream().await;
-    let grant = browser_bridge::open(upstream, "tab-ws", None).await.unwrap();
+    let grant = open(upstream, "tab-ws").await.unwrap();
 
     let mut request = format!("ws://127.0.0.1:{}/ws", port_of(&grant))
         .into_client_request()
@@ -519,9 +548,9 @@ async fn tabs_share_a_listener_per_target_port() {
     configure_once();
     let upstream = spawn_upstream().await;
     let other_upstream = spawn_upstream().await;
-    let first = browser_bridge::open(upstream, "tab-a", None).await.unwrap();
-    let second = browser_bridge::open(upstream, "tab-b", None).await.unwrap();
-    let other = browser_bridge::open(other_upstream, "tab-c", None).await.unwrap();
+    let first = open(upstream, "tab-a").await.unwrap();
+    let second = open(upstream, "tab-b").await.unwrap();
+    let other = open(other_upstream, "tab-c").await.unwrap();
 
     assert_eq!(port_of(&first), port_of(&second));
     assert_ne!(cap_of(&first), cap_of(&second));
@@ -553,8 +582,6 @@ async fn tabs_share_a_listener_per_target_port() {
 #[tokio::test]
 async fn codegs_own_port_is_refused() {
     configure_once();
-    let err = browser_bridge::open(RESERVED_PORT, "tab-reserved", None)
-        .await
-        .unwrap_err();
+    let err = open(RESERVED_PORT, "tab-reserved").await.unwrap_err();
     assert!(matches!(err, BridgeError::Reserved(p) if p == RESERVED_PORT));
 }

@@ -220,7 +220,11 @@ impl PickedElement {
         self.href = clamp(&self.href, MAX_URL_CHARS);
         self.title = clamp(&self.title, MAX_TITLE_CHARS);
         self.tag = clamp(&self.tag, 64);
-        self.label = clamp(&self.label, MAX_LABEL_CHARS);
+        // A label is one line of the block (`- element:`) and the name of the
+        // badge it goes into, and the page chooses the `id` inside it: an id
+        // with a line break in it split the line, and the conversation read
+        // back only the part before the break.
+        self.label = clamp(&one_line(&self.label), MAX_LABEL_CHARS);
         self.selector = clamp(&self.selector, MAX_SELECTOR_CHARS);
         self.role = clamp(&self.role, 64);
         self.name = clamp(&self.name, MAX_TEXT_CHARS);
@@ -228,7 +232,7 @@ impl PickedElement {
         self.html = clamp(&self.html, MAX_HTML_CHARS);
         self.path.truncate(MAX_PATH_STEPS);
         for step in &mut self.path {
-            *step = clamp(step, MAX_LABEL_CHARS);
+            *step = clamp(&one_line(step), MAX_LABEL_CHARS);
         }
         self.attributes.truncate(MAX_ATTRIBUTES);
         for attribute in &mut self.attributes {
@@ -245,7 +249,7 @@ impl PickedElement {
             *text = clamp(text, MAX_NEARBY_CHARS);
         }
         if self.label.trim().is_empty() {
-            self.label = self.tag.clone();
+            self.label = one_line(&self.tag);
         }
         self.rect = self.rect.filter(usable_region);
         self.viewport = self.viewport.filter(|viewport| {
@@ -686,6 +690,11 @@ fn clamp(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Every run of whitespace as one space, trimmed — the picker's `squash`.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn round(value: f64) -> i64 {
     if value.is_finite() {
         value.round() as i64
@@ -813,6 +822,40 @@ mod tests {
         // Non-finite numbers cannot travel through JSON, but a box outside the
         // page's own viewport can; only the degenerate ones are refused.
         assert!(with(serde_json::json!({"x": -50.0, "y": 0.0, "width": 8.0, "height": 8.0})).is_some());
+    }
+
+    /// The badge the element goes in is named by this label, and the block
+    /// says it on one line — which a page could break with its own `id`.
+    #[test]
+    fn a_label_the_page_split_over_lines_is_one_line() {
+        let payload = serde_json::json!({
+            "id": "p1",
+            "tag": "button",
+            "label": "button#a\n- screenshot: b",
+            "path": ["html", "body", "button#a\r\nb"],
+        });
+        let PickReport::Picked(element) = parse_pick(&payload).unwrap() else {
+            panic!("expected a pick");
+        };
+        assert_eq!(element.label, "button#a - screenshot: b");
+        assert_eq!(element.path[2], "button#a b");
+        let text = render_element(&element);
+        assert!(text.contains("- element: button#a - screenshot: b\n"), "{text}");
+        assert!(!text.contains("\n- screenshot:"), "{text}");
+
+        // A missing label falls back to the tag — which goes on the line too.
+        let bare = serde_json::json!({ "id": "p2", "tag": "x-a\nb", "label": " " });
+        let PickReport::Picked(element) = parse_pick(&bare).unwrap() else {
+            panic!("expected a pick");
+        };
+        assert_eq!(element.label, "x-a b");
+    }
+
+    /// Every block opens with the header the shared code recognizes a
+    /// hand-off by (`types::HANDOFF_BLOCK_HEADER`).
+    #[test]
+    fn every_block_opens_with_the_shared_header() {
+        assert!(UNTRUSTED_NOTE.starts_with(super::super::types::HANDOFF_BLOCK_HEADER));
     }
 
     #[test]

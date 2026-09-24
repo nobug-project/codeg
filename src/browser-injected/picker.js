@@ -227,7 +227,9 @@
   // every label into a paragraph.
   function describeShort(element) {
     var text = tagOf(element)
-    var id = attr(element, "id")
+    // Squashed like every other string here: an `id` is the page's to write,
+    // line breaks included, and this label is one line of the block.
+    var id = squash(attr(element, "id"))
     if (id) text += "#" + id
     var classes = classListOf(element)
     for (var i = 0; i < classes.length && i < 3; i++) text += "." + classes[i]

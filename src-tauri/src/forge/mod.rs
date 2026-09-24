@@ -1676,8 +1676,16 @@ fn origin_of(url: &reqwest::Url) -> (String, Option<String>, Option<u16>) {
     )
 }
 
+/// Every env var a reqwest client samples its proxy decision from at build
+/// time: the proxy URLs and the bypass list. A change to either must rebuild.
+fn proxy_fingerprint() -> Vec<(String, String)> {
+    let mut fingerprint = crate::network::proxy::current_proxy_env_vars();
+    fingerprint.extend(crate::network::proxy::current_no_proxy_env_vars());
+    fingerprint
+}
+
 pub(crate) fn http_client() -> Result<reqwest::Client, ForgeError> {
-    let fingerprint = crate::network::proxy::current_proxy_env_vars();
+    let fingerprint = proxy_fingerprint();
     if let Ok(guard) = HTTP_CLIENT.read() {
         if let Some((cached, client)) = guard.as_ref() {
             if *cached == fingerprint {
@@ -2459,6 +2467,6 @@ mod tests {
             .as_ref()
             .map(|(fp, _)| fp.clone())
             .expect("cached");
-        assert_eq!(cached_fp, crate::network::proxy::current_proxy_env_vars());
+        assert_eq!(cached_fp, proxy_fingerprint());
     }
 }

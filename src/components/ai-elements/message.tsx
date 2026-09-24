@@ -33,6 +33,7 @@ import { maskLiteralSpans } from "./markdown-mask"
 import { mermaidComponents } from "./mermaid-block"
 import { rehypePluginsAllowingCodeg } from "./rehype-allow-codeg"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
+import { withRelativeFileLinks } from "./rehype-relative-file-links"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
 import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
 import { remarkLocalImages } from "./remark-local-images"
@@ -477,7 +478,12 @@ const remarkPlugins = [
 // Streamdown's default rehype pipeline strips `codeg://` reference hrefs in
 // sanitization (rendering them as "[blocked]"); re-derive it so they survive to
 // MarkdownLink → ReferenceBadge. See rehype-allow-codeg for the full rationale.
-const rehypePlugins = rehypePluginsAllowingCodeg(defaultRehypePlugins)
+// …and relative local links (`./a.md`, `src/a.md`, `~/a.md`) keep their href
+// through harden, which would otherwise flatten them to a root path or block
+// them. See rehype-relative-file-links.
+const rehypePlugins = rehypePluginsAllowingCodeg(
+  withRelativeFileLinks(defaultRehypePlugins)
+)
 
 /**
  * How finished Markdown renders. Streamdown defaults to `mode="streaming"` +
@@ -505,6 +511,28 @@ const rehypePlugins = rehypePluginsAllowingCodeg(defaultRehypePlugins)
 const FINISHED_MODE = "static" as const
 const FINISHED_PARSE_INCOMPLETE_MARKDOWN = false
 
+/**
+ * How remend repairs an unclosed link while the text is still streaming: it
+ * shows the link's text, and nothing else, until the closing `)` arrives.
+ *
+ * remend's default instead points the partial link at the placeholder
+ * `streamdown:incomplete-link`. sanitize does not allow that scheme, so it
+ * drops the href, and harden turns the bare anchor into "label [blocked]" — on
+ * every link, for as long as its destination is still arriving. Worse,
+ * Streamdown memoizes list items, paragraphs and headings by their source span
+ * alone, and the placeholder is 26 characters long: a link whose destination
+ * is 26 characters too, and that ends its list item, paragraph or heading,
+ * spans the same source before and after it closes, so the element never
+ * repaints and the link stays "[blocked]" until the turn ends. As bare text the
+ * unclosed link is always shorter than the closed one, so closing it always
+ * moves the span and the element repaints.
+ *
+ * A caller may tune remend's other repairs, but not this one.
+ */
+export const LIVE_REMEND = {
+  linkMode: "text-only",
+} as const satisfies NonNullable<MessageResponseProps["remend"]>
+
 function MessageResponseImpl({
   className,
   children,
@@ -512,6 +540,7 @@ function MessageResponseImpl({
   // `mode="streaming" parseIncompleteMarkdown`. See FINISHED_MODE above.
   mode = FINISHED_MODE,
   parseIncompleteMarkdown = FINISHED_PARSE_INCOMPLETE_MARKDOWN,
+  remend,
   ...props
 }: MessageResponseProps) {
   const normalized = useMemo(
@@ -548,6 +577,7 @@ function MessageResponseImpl({
       rehypePlugins={rehypePlugins}
       mode={mode}
       parseIncompleteMarkdown={parseIncompleteMarkdown}
+      remend={remend ? { ...remend, ...LIVE_REMEND } : LIVE_REMEND}
       {...props}
       // Merge after spreading props so a caller can still override other
       // elements, but the link icon + safety routing on `a` — and the diagram

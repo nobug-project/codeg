@@ -21,7 +21,7 @@ vi.mock("@/lib/browser/window-label", () => ({
 }))
 vi.mock("@/lib/transport", () => ({
   isDesktop: () => true,
-  getTransport: () => ({
+  getShellTransport: () => ({
     subscribe: (event: string, handler: (payload: unknown) => void) => {
       mocks.handlers.set(event, handler)
       return Promise.resolve(() => mocks.handlers.delete(event))

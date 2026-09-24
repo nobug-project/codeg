@@ -23,6 +23,7 @@ import {
   useBrowserPrefs,
 } from "@/lib/browser/browser-prefs"
 
+import { NativeSurfaceBesideRoute } from "./browser-surface-host"
 import { BrowserTabView } from "./browser-tab-view"
 
 /**
@@ -63,10 +64,13 @@ function forgetOpened(key: number): void {
 
 export function BrowserViewerDrawer({
   url,
+  remote = false,
   open,
   onOpenChange,
 }: {
   url: string
+  /** An address on the remote codeg host (`BrowserTabSeed.remote`). */
+  remote?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -86,7 +90,12 @@ export function BrowserViewerDrawer({
           // Keyed by URL: a drawer handed another address starts a fresh
           // body, so the record it remembered for the old one never shows
           // under the new header.
-          <BrowserViewerBody key={url} url={url} onOpenChange={onOpenChange} />
+          <BrowserViewerBody
+            key={url}
+            url={url}
+            remote={remote}
+            onOpenChange={onOpenChange}
+          />
         ) : null}
       </DrawerContent>
     </Drawer>
@@ -95,9 +104,11 @@ export function BrowserViewerDrawer({
 
 function BrowserViewerBody({
   url,
+  remote,
   onOpenChange,
 }: {
   url: string
+  remote: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const t = useTranslations("Browser.drawer")
@@ -117,8 +128,11 @@ function BrowserViewerBody({
     return nextBodyKey
   })
   useEffect(() => {
-    rememberOpened(bodyKey, openBrowserTab(url, { activate: false }))
-  }, [bodyKey, openBrowserTab, url])
+    rememberOpened(
+      bodyKey,
+      openBrowserTab(url, { activate: false, ...(remote ? { remote } : {}) })
+    )
+  }, [bodyKey, openBrowserTab, remote, url])
   useEffect(() => () => forgetOpened(bodyKey), [bodyKey])
   const opened = useSyncExternalStore(
     subscribeOpened,
@@ -132,9 +146,10 @@ function BrowserViewerBody({
   // in the profile new tabs use. Once resolved, it is that record or nothing
   // — never a tab of another profile, not even after the record closes.
   const prefs = useBrowserPrefs()
-  const wantedProfile = browserProfileExists(prefs, prefs.newTabProfile)
-    ? prefs.newTabProfile
-    : DEFAULT_BROWSER_PROFILE_ID
+  const wantedProfile =
+    !remote && browserProfileExists(prefs, prefs.newTabProfile)
+      ? prefs.newTabProfile
+      : DEFAULT_BROWSER_PROFILE_ID
   const wanted = normalizeUrlForDedupe(url)
   const tab =
     opened === undefined
@@ -142,6 +157,7 @@ function BrowserViewerBody({
           (it) =>
             it.kind === "browser" &&
             it.browser.profile === wantedProfile &&
+            (it.browser.remote === true) === remote &&
             normalizeUrlForDedupe(it.browser.initialUrl) === wanted
         )
       : opened
@@ -170,7 +186,12 @@ function BrowserViewerBody({
       </div>
       <div className="min-h-0 flex-1">
         {tab?.kind === "browser" ? (
-          <BrowserTabView key={tab.id} tab={tab} />
+          // Over whatever route is up: the page shows here even when the
+          // file column it would otherwise live in is hidden under a
+          // full-page route.
+          <NativeSurfaceBesideRoute.Provider value={true}>
+            <BrowserTabView key={tab.id} tab={tab} />
+          </NativeSurfaceBesideRoute.Provider>
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
             {t("cannotOpen")}

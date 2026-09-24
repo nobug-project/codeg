@@ -47,6 +47,10 @@ import {
 } from "@/lib/browser/browser-prefs"
 import { clearBrowserAgentActivity } from "@/lib/browser/browser-tab-store"
 import { isBlankPageUrl } from "@/lib/browser/browser-url"
+import {
+  isRemoteHostAddress,
+  remoteHostAddress,
+} from "@/lib/browser/remote-host"
 import type { BrowserTabState } from "@/lib/browser/types"
 import { browserTabBackendId } from "@/lib/file-tab-id"
 import { openUrl } from "@/lib/platform"
@@ -184,6 +188,7 @@ export function BrowserToolbar({
   // English message the error already carries.
   const tRoot = useTranslations()
   const inspectorEnabled = useBrowserPrefs().devtools
+  const openBrowserTab = useOptionalWorkspaceActions()?.openBrowserTab ?? null
   const backendId = browserTabBackendId(tab.id)
   const currentUrl = state?.url || state?.requestedUrl || tab.browser.initialUrl
   // The blank page is the absence of an address, so the bar shows its
@@ -246,6 +251,17 @@ export function BrowserToolbar({
     }
     setEditing(false)
     inputRef.current?.blur()
+    // Seen from a window bound to a remote codeg-server, a loopback or
+    // private address is that host's — and a tab of THIS computer reaches
+    // this machine at the same address instead. It opens as a tab of the
+    // remote host beside this one, the way a link to it does; with nowhere to
+    // open one, it goes nowhere rather than here. A tab of the remote host
+    // goes there itself: everything it loads comes from that host.
+    if (tab.browser.remote !== true && isRemoteHostAddress(url)) {
+      setDraft(address)
+      openBrowserTab?.(url, { remote: true, openerTabId: tab.id })
+      return
+    }
     const asOf = Date.now()
     void browserNavigate(backendId, url).then(
       // Asking for a page starts the record of what agents did to it again —
@@ -394,7 +410,11 @@ export function BrowserToolbar({
         <BrowserAgentActivityControl tab={tab} />
         <BrowserSendToChatControl tab={tab} state={state} />
       </div>
-      <ProfileMenu tab={tab} currentUrl={currentUrl} />
+      {/* A remote tab lives in its connection's profile, which is no
+          choice of the person's and no place to open the page in another. */}
+      {tab.browser.remote === true ? null : (
+        <ProfileMenu tab={tab} currentUrl={currentUrl} />
+      )}
       {/* This page's own actions, folded into one control. They act on the
           page rather than on the browsing — nobody reaches for them mid-scroll
           — so they cost a click here and give the row back to the address bar
@@ -416,7 +436,13 @@ export function BrowserToolbar({
         <DropdownMenuContent align="end" className="w-auto min-w-44">
           <DropdownMenuItem
             onSelect={() => {
-              void copyTextToClipboard(currentUrl).then(() =>
+              // A remote tab's link as the remote host knows it: the macOS
+              // alias its page uses means nothing anywhere else.
+              const link =
+                tab.browser.remote === true
+                  ? remoteHostAddress(currentUrl)
+                  : currentUrl
+              void copyTextToClipboard(link).then(() =>
                 toast.success(t("copied"))
               )
             }}
@@ -424,10 +450,14 @@ export function BrowserToolbar({
             <Copy />
             {t("copyUrl")}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void openUrl(currentUrl)}>
-            <ExternalLink />
-            {t("openInSystem")}
-          </DropdownMenuItem>
+          {/* The system browser is this computer's: a remote tab's address
+              would reach this machine there, not the remote host. */}
+          {tab.browser.remote === true ? null : (
+            <DropdownMenuItem onSelect={() => void openUrl(currentUrl)}>
+              <ExternalLink />
+              {t("openInSystem")}
+            </DropdownMenuItem>
+          )}
           {/* Hidden, not disabled, when the person switched the inspector
               off: they said they do not want it, and a greyed row saying so
               every time they open this menu is the wrong way to agree. */}

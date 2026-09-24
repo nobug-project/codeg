@@ -917,7 +917,11 @@ mod tests {
         assert_eq!(blocks.len(), 6);
         for (index, expected) in [
             (1, "[report.pdf](file:///tmp/report.pdf)"),
-            (2, "[attachment:///note.txt](attachment:///note.txt)"),
+            // The attachment a text resource is shown as — without its body.
+            (
+                2,
+                "attachment:///note.txt\n<context ref=\"attachment:///note.txt\">\n\n</context>",
+            ),
             (3, "[attachment:///data.bin](attachment:///data.bin)"),
         ] {
             assert!(matches!(&blocks[index], ContentBlock::Text { text } if text == expected));
@@ -1075,7 +1079,7 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].blocks.len(), 2);
         assert!(
-            matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "[file:///tmp/note.txt](file:///tmp/note.txt)")
+            matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "file:///tmp/note.txt\n<context ref=\"file:///tmp/note.txt\">\n\n</context>")
         );
         // The two prose chunks still coalesce with each other.
         assert!(

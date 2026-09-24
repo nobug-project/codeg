@@ -8,6 +8,7 @@ import {
   isLoopbackHost,
   isLoopbackOrPrivateUrl,
   isPrivateNetworkHost,
+  isRemoteHostName,
   normalizeUrlForDedupe,
   originOf,
   portOf,
@@ -25,6 +26,11 @@ describe("isLoopbackHost", () => {
     "::",
     "0.0.0.0",
     "::ffff:127.0.0.1",
+    // How the URL parser writes the mapped form, and a fully qualified name.
+    "::ffff:7f00:1",
+    "[::ffff:7f00:1]",
+    "localhost.",
+    "app.localhost.",
   ])("%s is loopback", (host) => {
     expect(isLoopbackHost(host)).toBe(true)
   })
@@ -54,7 +60,9 @@ describe("isPrivateNetworkHost", () => {
     "fe80::1%en0",
     "[fe80::1]",
     "mymac.local",
+    "mymac.local.",
     "::ffff:192.168.0.1",
+    "::ffff:c0a8:1",
   ])("%s is private / link-local", (host) => {
     expect(isPrivateNetworkHost(host)).toBe(true)
   })
@@ -71,6 +79,44 @@ describe("isPrivateNetworkHost", () => {
     "localhost",
   ])("%s is not private", (host) => {
     expect(isPrivateNetworkHost(host)).toBe(false)
+  })
+})
+
+describe("isRemoteHostName", () => {
+  // Exactly what a page's address becomes once parsed: the parser, not the
+  // person, decides the spelling the classifier sees.
+  it("sees every spelling the URL parser produces for loopback", () => {
+    for (const url of [
+      "http://[::ffff:127.0.0.1]:3000/",
+      "http://localhost.:3000/",
+    ]) {
+      expect(isLoopbackOrPrivateUrl(url)).toBe(true)
+    }
+  })
+
+  it("puts loopback and private names on the remote host", () => {
+    expect(isRemoteHostName("localhost", "dev.example.com")).toBe(true)
+    expect(isRemoteHostName("192.168.1.20", "dev.example.com")).toBe(true)
+    expect(isRemoteHostName("example.org", "dev.example.com")).toBe(false)
+  })
+
+  // The window reaches the server itself directly, so its own private name
+  // is an address of this computer's network too.
+  it("leaves the server's own private name to this computer", () => {
+    expect(isRemoteHostName("192.168.1.5", "192.168.1.5")).toBe(false)
+    expect(isRemoteHostName("192.168.1.6", "192.168.1.5")).toBe(true)
+    expect(isRemoteHostName("fd00::5", "[FD00::5]")).toBe(false)
+  })
+
+  // Through an SSH tunnel the server is this machine's loopback: nothing on
+  // this machine's loopback is the remote's.
+  it("exempts nothing for a server reached through a loopback address", () => {
+    expect(isRemoteHostName("127.0.0.1", "127.0.0.1")).toBe(true)
+    expect(isRemoteHostName("localhost", "localhost")).toBe(true)
+  })
+
+  it("puts everything loopback or private on the remote host when the server has no name", () => {
+    expect(isRemoteHostName("192.168.1.5", null)).toBe(true)
   })
 })
 

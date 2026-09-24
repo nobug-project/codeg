@@ -1,13 +1,17 @@
-//! ACP `session/fork` support via raw JSON-RPC messages.
+//! ACP `session/fork` support.
 //!
-//! Sent untyped even though the schema now types `session/fork` (behind
-//! `unstable_session_fork`): the raw reply is inspected before it is
-//! deserialized — the top-level `models`, which the typed response has no field
-//! for — the same pattern `session/new` and `session/resume` use in
-//! connection.rs.
+//! The request is the schema's typed `ForkSessionRequest` (behind
+//! `unstable_session_fork`). It goes out untyped for the one reason
+//! `session/new` and `session/resume` do: grok's top-level `models` has no field
+//! on the typed response, so [`send_capturing_models`] reads it off the raw
+//! reply first.
 
-use agent_client_protocol::schema::v1::{ForkSessionRequest, ForkSessionResponse, SessionId};
-use agent_client_protocol::{Agent, ConnectionTo, UntypedMessage};
+use agent_client_protocol::schema::v1::{
+    ForkSessionRequest, ForkSessionResponse, Meta, SessionId, AGENT_METHOD_NAMES,
+};
+use agent_client_protocol::{Agent, ConnectionTo};
+
+use crate::acp::connection::send_capturing_models;
 
 use crate::acp::error::AcpError;
 use crate::models::agent::AgentType;
@@ -178,7 +182,7 @@ pub fn resolve_fork_point(
 }
 
 impl ForkPoint {
-    fn to_meta(&self) -> serde_json::Value {
+    fn to_meta(&self) -> Meta {
         let mut fork = serde_json::Map::new();
         fork.insert("version".into(), serde_json::json!(1));
         fork.insert("messageId".into(), serde_json::json!(self.message_id));
@@ -188,17 +192,33 @@ impl ForkPoint {
         if let Some(n) = self.message_occurrence {
             fork.insert("messageOccurrence".into(), serde_json::json!(n));
         }
-        serde_json::json!({ "jetbrains": { "air": { "fork": fork } } })
+        let mut meta = Meta::new();
+        meta.insert(
+            "jetbrains".into(),
+            serde_json::json!({ "air": { "fork": fork } }),
+        );
+        meta
     }
 }
 
 /// Send a `session/fork` request over an existing ACP connection.
 ///
-/// Returns the full `ForkSessionResponse` so the caller can attach directly
-/// without a separate `session/load` round-trip, plus the raw top-level `models`
-/// value (captured before the typed deserialize drops it) so the Grok path can
-/// parse per-model reasoning-effort data. `None` when the response has no
-/// `models` field.
+/// Returns the full `ForkSessionResponse` — what the caller attaches when the
+/// agent cannot resume the fork — plus the raw top-level `models` value so the
+/// Grok path can parse per-model reasoning-effort data (`None` when the
+/// response has none).
+///
+/// The fork names no MCP servers, on purpose. It is not the request that makes
+/// the forked session usable: `handle_fork_or_exit` resumes it straight away,
+/// with the connection's servers, and every adapter checked mounts them there.
+/// Naming them on the fork too only starts them twice — codex-acp 1.13 builds
+/// the forked thread from the fork's list, then the resume finds that thread
+/// idle and unsubscribed and cold-restarts it with the resume's config;
+/// glm-acp-agent connects them on the fork and reconnects on the resume;
+/// deepseek-acp mounts them on a session handle the resume replaces with a new
+/// one. claude-agent-acp ignores the field. When there is no resume — the agent
+/// does not advertise it, or it fails — the fork is attached as-is, without
+/// servers, as it always has been.
 ///
 /// `fork_point` forks at a chosen message instead of the tail; see [`ForkPoint`].
 /// An agent that does not implement it ignores the unknown `_meta` key, so this
@@ -211,29 +231,25 @@ pub async fn fork_session(
     cwd: &str,
     fork_point: Option<&ForkPoint>,
 ) -> Result<(ForkSessionResponse, Option<serde_json::Value>), AcpError> {
+    send_capturing_models(
+        cx,
+        AGENT_METHOD_NAMES.session_fork,
+        build_fork_request(session_id, cwd, fork_point),
+    )
+    .await
+    .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))
+}
+
+fn build_fork_request(
+    session_id: &SessionId,
+    cwd: &str,
+    fork_point: Option<&ForkPoint>,
+) -> ForkSessionRequest {
     let req = ForkSessionRequest::new(session_id.clone(), cwd);
-    // Built through a Value so the AIR block can be attached: `_meta` is not a
-    // settable field on the typed request, and the bytes are otherwise
-    // identical to the typed send.
-    let mut req = serde_json::to_value(&req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-    if let (Some(point), Some(obj)) = (fork_point, req.as_object_mut()) {
-        obj.insert("_meta".into(), point.to_meta());
+    match fork_point {
+        Some(point) => req.meta(point.to_meta()),
+        None => req,
     }
-    let untyped_req = UntypedMessage::new("session/fork", &req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-
-    let raw_response: serde_json::Value = cx
-        .send_request_to(Agent, untyped_req)
-        .block_task()
-        .await
-        .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))?;
-
-    let models = raw_response.get("models").cloned();
-    let response: ForkSessionResponse = serde_json::from_value(raw_response)
-        .map_err(|e| AcpError::protocol(format!("Failed to parse fork response: {e}")))?;
-
-    Ok((response, models))
 }
 
 #[cfg(test)]
@@ -255,24 +271,48 @@ mod tests {
         }
     }
 
-    /// The shape both adapters parse: version 1, and the id under
-    /// `jetbrains.air.fork`.
+    /// The shape both adapters parse — version 1, and the id under
+    /// `jetbrains.air.fork` — as the request's own top-level `_meta`, which is
+    /// where the typed request puts it.
     #[test]
-    fn meta_matches_the_air_fork_block() {
-        let meta = ForkPoint {
+    fn fork_request_carries_the_air_fork_block_as_its_meta() {
+        let point = ForkPoint {
             message_id: "msg_01".into(),
             message_fingerprint: Some("sha256:ab".into()),
             message_occurrence: Some(2),
-        }
-        .to_meta();
+        };
+        let wire = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            "/work",
+            Some(&point),
+        ))
+        .unwrap();
         assert_eq!(
-            meta,
-            serde_json::json!({"jetbrains": {"air": {"fork": {
-                "version": 1,
-                "messageId": "msg_01",
-                "messageFingerprint": "sha256:ab",
-                "messageOccurrence": 2,
-            }}}})
+            wire,
+            serde_json::json!({
+                "sessionId": "sess-1",
+                "cwd": "/work",
+                "_meta": {"jetbrains": {"air": {"fork": {
+                    "version": 1,
+                    "messageId": "msg_01",
+                    "messageFingerprint": "sha256:ab",
+                    "messageOccurrence": 2,
+                }}}},
+            })
+        );
+    }
+
+    /// A tail fork is the bare request: no fork point, and no MCP servers — the
+    /// resume that follows every fork is what mounts them (see
+    /// [`fork_session`]), so naming them here would start them twice.
+    #[test]
+    fn a_tail_fork_names_neither_a_fork_point_nor_mcp_servers() {
+        let wire =
+            serde_json::to_value(build_fork_request(&SessionId::new("sess-1"), "/work", None))
+                .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"sessionId": "sess-1", "cwd": "/work"})
         );
     }
 

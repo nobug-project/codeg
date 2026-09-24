@@ -2639,6 +2639,103 @@ fn parse_data_uri_image(raw: &str) -> Option<(String, String)> {
     Some((mime_type.to_string(), data.to_string()))
 }
 
+/// Claude Code's file tools take a few spellings besides their canonical
+/// argument names, and the CLI renames them for itself before the tool runs —
+/// but only on the copy it executes. The `tool_use` block that streams to a
+/// client and lands in the JSONL keeps whatever the model sent, so every card
+/// reading `file_path` / `content` / `old_string` comes up empty: a Write shows
+/// no path and no body, an Edit names no file.
+///
+/// The renames, as the CLI performs them (`coerceInput`, read out of the
+/// 2.1.280 binary):
+///
+/// * `Write` (new in 2.1.280; claude-agent-acp 0.81.1 taught its own titles
+///   and diffs the same, #1161): `path` → `file_path`, and `file_text` or
+///   `file_content` → `content` — the latter only when exactly one of the two
+///   is present, since the CLI will not guess between them.
+/// * `Edit` (already accepted by 2.1.274): `path` → `file_path`, `old_str` →
+///   `old_string`, `new_str` → `new_string`, and `replace_name` →
+///   `replace_all` (true only for `true` / `"true"`).
+///
+/// Each rename fills a canonical key the input left ABSENT, and only from a
+/// string, so an input that already uses the canonical names — the common
+/// case — comes back `None`. The alias is moved rather than copied, so the card
+/// sees the arguments the tool ran with. It is display-only and deliberately
+/// not gated on a CLI version: a call a CLI refused — one older than the alias,
+/// or one still invalid after renaming — renders as the model meant it, next
+/// to the error result that says why. `parsers::qoder` reads its Claude-shaped
+/// transcripts through the same extractor and gets the same renames.
+///
+/// Keyed on the tool NAME, never on shape: `path` is Grep's and Glob's own
+/// argument and must not turn into a `file_path` there.
+pub(crate) fn canonical_file_tool_input(
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let (is_write, aliases): (bool, &[&str]) = match tool_name {
+        "Write" => (true, &["path", "file_text", "file_content"]),
+        "Edit" => (false, &["path", "old_str", "new_str", "replace_name"]),
+        _ => return None,
+    };
+    let args = input.as_object()?;
+    // The common case carries no alias at all; settle that without copying
+    // what can be a whole file's content.
+    if !aliases.iter().any(|alias| args.contains_key(*alias)) {
+        return None;
+    }
+    let mut args = args.clone();
+    let mut changed = move_string_alias(&mut args, "path", "file_path");
+    if is_write {
+        let present: Vec<&str> = ["file_text", "file_content"]
+            .into_iter()
+            .filter(|alias| args.contains_key(*alias))
+            .collect();
+        if let [alias] = present[..] {
+            changed |= move_string_alias(&mut args, alias, "content");
+        }
+    } else {
+        changed |= move_string_alias(&mut args, "old_str", "old_string");
+        changed |= move_string_alias(&mut args, "new_str", "new_string");
+        // Unlike the others this one is dropped even when `replace_all` is
+        // already set, exactly as the CLI does.
+        if let Some(replace_name) = args.remove("replace_name") {
+            if !args.contains_key("replace_all") {
+                let replace_all = matches!(replace_name, serde_json::Value::Bool(true))
+                    || replace_name.as_str() == Some("true");
+                args.insert(
+                    "replace_all".to_string(),
+                    serde_json::Value::Bool(replace_all),
+                );
+            }
+            changed = true;
+        }
+    }
+    changed.then_some(serde_json::Value::Object(args))
+}
+
+/// Move `alias` onto `canonical` when the canonical key is absent and the alias
+/// holds a string. Returns whether anything moved.
+fn move_string_alias(
+    args: &mut serde_json::Map<String, serde_json::Value>,
+    alias: &str,
+    canonical: &str,
+) -> bool {
+    if args.contains_key(canonical) || !args.get(alias).is_some_and(serde_json::Value::is_string) {
+        return false;
+    }
+    if let Some(value) = args.remove(alias) {
+        args.insert(canonical.to_string(), value);
+    }
+    true
+}
+
+/// A `tool_use` input as the JSON string the tool card parses, with the file
+/// tools' argument aliases settled first (see [`canonical_file_tool_input`]).
+fn tool_input_json(tool_name: &str, input: &serde_json::Value) -> String {
+    canonical_file_tool_input(tool_name, input)
+        .map_or_else(|| input.to_string(), |canonical| canonical.to_string())
+}
+
 /// `pub(crate)`: shared with `parsers::qoder` (same `text`/`thinking`/
 /// `tool_use`/`server_tool_use` block shapes).
 pub(crate) fn extract_assistant_content(value: &serde_json::Value) -> Vec<ContentBlock> {
@@ -2680,7 +2777,7 @@ pub(crate) fn extract_assistant_content(value: &serde_json::Value) -> Vec<Conten
                         .and_then(|n| n.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    let input_preview = item.get("input").map(|i| i.to_string());
+                    let input_preview = item.get("input").map(|i| tool_input_json(&tool_name, i));
                     blocks.push(ContentBlock::ToolUse {
                         tool_use_id,
                         tool_name,
@@ -2942,7 +3039,9 @@ fn parse_subagent_tool_calls(
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown")
                             .to_string();
-                        let input = item.get("input").map(|v| truncate_str(&v.to_string(), 500));
+                        let input = item
+                            .get("input")
+                            .map(|v| truncate_str(&tool_input_json(&name, v), 500));
                         if !id.is_empty() {
                             calls.push((id, name, input));
                         }
@@ -3315,6 +3414,177 @@ mod tests {
         assert_eq!(unwrap_handback_frame(HANDBACK_HEADER), None);
         let item = json!({"type": "tool_result", "content": "plain result"});
         assert_eq!(extract_tool_result_text(&item).as_deref(), Some("plain result"));
+    }
+
+    #[test]
+    fn write_aliases_are_read_the_way_the_cli_reads_them() {
+        assert_eq!(
+            canonical_file_tool_input(
+                "Write",
+                &json!({"path": "/w/a.ts", "file_text": "export {}\n"})
+            ),
+            Some(json!({"file_path": "/w/a.ts", "content": "export {}\n"}))
+        );
+        assert_eq!(
+            canonical_file_tool_input(
+                "Write",
+                &json!({"file_path": "/w/b.ts", "file_content": "x"})
+            ),
+            Some(json!({"file_path": "/w/b.ts", "content": "x"}))
+        );
+    }
+
+    #[test]
+    fn write_with_both_content_aliases_is_not_guessed_at() {
+        // The CLI renames a content alias only when it is the ONLY one; with
+        // both present it leaves them (and the call fails validation). The path
+        // alias still moves on its own.
+        assert_eq!(
+            canonical_file_tool_input(
+                "Write",
+                &json!({"path": "/w/a", "file_text": "one", "file_content": "two"})
+            ),
+            Some(json!({"file_path": "/w/a", "file_text": "one", "file_content": "two"}))
+        );
+        assert_eq!(
+            canonical_file_tool_input(
+                "Write",
+                &json!({"file_path": "/w/a", "file_text": "one", "file_content": "two"})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_canonical_argument_wins_over_its_alias() {
+        // Nothing to settle: the canonical names are what every card reads, and
+        // the alias beside them is not what the tool ran with.
+        assert_eq!(
+            canonical_file_tool_input(
+                "Write",
+                &json!({"file_path": "/w/a", "path": "/w/b", "content": "x", "file_text": "y"})
+            ),
+            None
+        );
+        assert_eq!(
+            canonical_file_tool_input(
+                "Edit",
+                &json!({"file_path": "/w/a", "old_string": "a", "new_string": "b", "old_str": "z"})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn edit_aliases_are_read_the_way_the_cli_reads_them() {
+        assert_eq!(
+            canonical_file_tool_input(
+                "Edit",
+                &json!({"path": "/w/a.rs", "old_str": "foo", "new_str": "bar", "replace_name": "true"})
+            ),
+            Some(json!({
+                "file_path": "/w/a.rs",
+                "old_string": "foo",
+                "new_string": "bar",
+                "replace_all": true,
+            }))
+        );
+        // `replace_name` goes even when `replace_all` is already set, which
+        // keeps its own value; anything but `true`/"true" reads as false.
+        assert_eq!(
+            canonical_file_tool_input(
+                "Edit",
+                &json!({"file_path": "/w/a", "old_string": "a", "new_string": "b",
+                        "replace_all": false, "replace_name": true})
+            ),
+            Some(
+                json!({"file_path": "/w/a", "old_string": "a", "new_string": "b", "replace_all": false})
+            )
+        );
+        assert_eq!(
+            canonical_file_tool_input(
+                "Edit",
+                &json!({"file_path": "/w/a", "old_string": "a", "new_string": "b", "replace_name": "yes"})
+            ),
+            Some(
+                json!({"file_path": "/w/a", "old_string": "a", "new_string": "b", "replace_all": false})
+            )
+        );
+    }
+
+    #[test]
+    fn aliases_are_only_settled_for_the_file_tools_and_only_from_strings() {
+        // `path` is Grep's and Glob's own argument.
+        for tool in ["Grep", "Glob", "Read", "Bash", "MultiEdit"] {
+            assert_eq!(
+                canonical_file_tool_input(tool, &json!({"pattern": "x", "path": "/w"})),
+                None,
+                "{tool}"
+            );
+        }
+        assert_eq!(
+            canonical_file_tool_input("Write", &json!({"path": 42, "file_text": ["x"]})),
+            None
+        );
+        assert_eq!(
+            canonical_file_tool_input("Write", &json!("not an object")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_history_write_that_used_the_aliases_renders_with_canonical_arguments() {
+        let record = json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_w",
+                    "name": "Write",
+                    "input": {"path": "/w/notes.md", "file_text": "# Notes\n"},
+                }],
+            },
+        });
+        let blocks = extract_assistant_content(&record);
+        let Some(ContentBlock::ToolUse {
+            input_preview: Some(input),
+            ..
+        }) = blocks.first()
+        else {
+            panic!("expected a tool_use block, got {blocks:?}");
+        };
+        let input: serde_json::Value = serde_json::from_str(input).unwrap();
+        assert_eq!(
+            input,
+            json!({"file_path": "/w/notes.md", "content": "# Notes\n"})
+        );
+    }
+
+    #[test]
+    fn a_subagent_edit_that_used_the_aliases_renders_with_canonical_arguments() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_e",
+                    "name": "Edit",
+                    "input": {"path": "/w/lib.rs", "old_str": "a", "new_str": "b"},
+                }]},
+            })
+        )
+        .unwrap();
+        let (calls, _, _) = parse_subagent_tool_calls(&file.path().to_path_buf());
+        let input: serde_json::Value =
+            serde_json::from_str(calls[0].input_preview.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            input,
+            json!({"file_path": "/w/lib.rs", "old_string": "a", "new_string": "b"})
+        );
     }
 
     /// A resume replays the surviving history into the SAME transcript,

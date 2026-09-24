@@ -52,12 +52,15 @@ const h = vi.hoisted(() => {
     buildDelegationSeedEnvelopes: vi.fn(() => []),
     denormalizeSnapshot: vi.fn(),
     // Stable across renders so tests can assert on what the error handler
-    // routes to the status-bar alert vs. to the OS notification.
-    pushAlert: vi.fn(),
+    // routes to the OS notification.
     notifyDesktop: vi.fn(async () => true),
     toastWarning: vi.fn(),
     toastError: vi.fn(),
     toastInfo: vi.fn(),
+    toastDismiss: vi.fn(),
+    // The status-bar alert list — where every notified warning/error is kept.
+    recordAlert: vi.fn(),
+    openSettingsWindow: vi.fn(async () => {}),
     // Every `t(key, values)` this render made. The mock below still returns
     // the bare key (what most assertions compare against), so interpolated
     // values would otherwise be unobservable — this is how a test checks the
@@ -82,10 +85,6 @@ vi.mock("@/lib/delegation-seed", () => ({
   buildDelegationSeedEnvelopes: h.buildDelegationSeedEnvelopes,
 }))
 
-vi.mock("@/contexts/alert-context", () => ({
-  useAlertContext: () => ({ pushAlert: h.pushAlert }),
-}))
-
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: { path: "/tmp/x", name: "x" } }),
 }))
@@ -102,8 +101,11 @@ vi.mock("sonner", () => ({
     warning: h.toastWarning,
     error: h.toastError,
     info: h.toastInfo,
+    dismiss: h.toastDismiss,
   },
 }))
+
+vi.mock("@/contexts/alert-context", () => ({ recordAlert: h.recordAlert }))
 
 vi.mock("@/lib/selector-prefs-storage", () => ({
   getSavedPrefsForConnect: () => ({ modeId: undefined, configValues: {} }),
@@ -127,6 +129,7 @@ vi.mock("@/lib/api", () => ({
   acpCancel: h.acpCancel,
   acpRespondPermission: vi.fn(),
   acpTouchConnection: h.acpTouchConnection,
+  openSettingsWindow: h.openSettingsWindow,
   // Imported by the conversation runtime store (a real dependency of the
   // provider via the background-activity bridge). The settled path no longer
   // refetches (it flips the launch card in-memory); reject any stray call so a
@@ -189,6 +192,8 @@ beforeEach(() => {
     configStale: false,
     configStaleKind: null,
     lastError: null,
+    lastErrorCode: null,
+    lastErrorLevel: "error",
     eventSeq: 0,
     activeDelegations: [],
   })
@@ -212,6 +217,12 @@ beforeEach(() => {
   h.acpCancel.mockReset()
   h.acpCancel.mockResolvedValue(undefined)
   h.tCalls.length = 0
+  h.toastWarning.mockClear()
+  h.toastError.mockClear()
+  h.toastInfo.mockClear()
+  h.toastDismiss.mockClear()
+  h.recordAlert.mockClear()
+  h.openSettingsWindow.mockClear()
 })
 
 function latestAttachHandlers(): AttachHandlers {
@@ -237,6 +248,34 @@ function hydrateSnapshot(
   act(() => {
     handlers.onSnapshot(snapshot, snapshot.event_seq)
   })
+}
+
+/** The fields every mocked `denormalizeSnapshot` patch carries — an idle,
+ *  error-free snapshot of the "spawned-conn" connection. */
+function snapshotBase() {
+  return {
+    connectionId: "spawned-conn",
+    status: "connected",
+    sessionId: null,
+    modes: null,
+    configOptions: null,
+    availableCommands: null,
+    usage: null,
+    liveMessage: null,
+    pendingPermission: null,
+    pendingAskQuestion: null,
+    pendingUserMessage: null,
+    promptCapabilities: null,
+    selectorsReady: false,
+    supportsFork: false,
+    configStale: false,
+    configStaleKind: null,
+    backgroundOutstanding: 0,
+    activeDelegations: [],
+    lastError: null as string | null,
+    lastErrorCode: null as string | null,
+    lastErrorLevel: "error",
+  }
 }
 
 describe("AcpConnectionsProvider cross-client viewer lifecycle", () => {
@@ -640,6 +679,70 @@ describe("AcpConnectionsProvider AIR session-failure lifecycle", () => {
       severity: "error",
       resolved: false,
     })
+  })
+
+  it("tells the OS the disguised end_turn failed, instead of 'finished responding'", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: failure(
+        "t1:error",
+        1,
+        "error",
+        "The connection to Claude was lost."
+      ),
+    })
+    h.notifyDesktop.mockClear()
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "turn_complete",
+      session_id: "sess-1",
+      stop_reason: "end_turn",
+    })
+
+    expect(h.notifyDesktop).toHaveBeenCalledTimes(1)
+    expect(h.notifyDesktop).toHaveBeenCalledWith("error", expect.anything())
+    expect(h.tCalls).toContainEqual([
+      "notificationError",
+      { agent: "Claude Code", message: "The connection to Claude was lost." },
+    ])
+  })
+
+  it("notifies 'finished' for a clean turn only — never for a cancelled one", async () => {
+    const handlers = await connectOwner()
+    const turn = (seq: number, stop_reason: string) => {
+      emitAcpEvent(handlers, {
+        seq,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "prompting",
+      })
+      emitAcpEvent(handlers, {
+        seq: seq + 1,
+        connection_id: "spawned-conn",
+        type: "turn_complete",
+        session_id: "sess-1",
+        stop_reason,
+      })
+    }
+    h.notifyDesktop.mockClear()
+    turn(1, "cancelled")
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+    turn(3, "end_turn")
+    expect(h.notifyDesktop).toHaveBeenCalledTimes(1)
+    expect(h.notifyDesktop).toHaveBeenCalledWith(
+      "turn_complete",
+      expect.anything()
+    )
   })
 
   it("keeps warnings active across a cancelled exit and settles them only on a clean end_turn", async () => {
@@ -2813,7 +2916,7 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     )
   })
 
-  it("reverts the optimistic pick, surfaces the localized error, and keeps the attempted preference", async () => {
+  it("reverts the optimistic pick, toasts the localized verdict, and keeps the attempted preference", async () => {
     const handlers = await connectGrokOwner()
 
     // Composer selector arrives with grok-4.5 active.
@@ -2864,8 +2967,23 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     // The selector snapped back to the model actually in effect.
     expect(conn.configOptions?.[0]?.kind.current_value).toBe("grok-4.5")
     // The coded error is localized (the useTranslations mock echoes the key) —
-    // NOT the raw fallback message.
-    expect(conn.error).toBe("backendErrors.grokModelSwitchIncompatibleAgent")
+    // NOT the raw fallback message — and, being the verdict on a click, it is
+    // a toast: nothing is left standing in the composer dock afterwards.
+    expect(h.toastWarning).toHaveBeenCalledWith(
+      "backendErrors.grokModelSwitchIncompatibleAgent",
+      expect.objectContaining({
+        id: "acp-error:spawned-conn:grok_model_switch_incompatible_agent",
+      })
+    )
+    // …kept in the alert list under the same key, so a repeat refreshes it.
+    expect(h.recordAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "acp-error:spawned-conn:grok_model_switch_incompatible_agent",
+        level: "warning",
+        message: "backendErrors.grokModelSwitchIncompatibleAgent",
+      })
+    )
+    expect(conn.error).toBeNull()
     // The attempted model stays the saved preference (no revert of the persisted
     // choice), so a fresh session lands on Composer where the switch succeeds.
     expect(saveConfigPreference).toHaveBeenCalledTimes(1)
@@ -2911,18 +3029,31 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
 
     expect(h.toastWarning).toHaveBeenCalledTimes(1)
     // The useTranslations mock echoes the key, so the message itself is the key.
-    expect(h.toastWarning).toHaveBeenCalledWith("configOptionAdjusted")
+    expect(h.toastWarning).toHaveBeenCalledWith("configOptionAdjusted", {
+      id: "acp-config-adjusted:spawned-conn:model",
+    })
+    expect(h.recordAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "acp-config-adjusted:spawned-conn:model",
+        level: "warning",
+      })
+    )
   })
 
-  it("raises a notice as a toast and mirrors only the graded levels to the banner", async () => {
-    // Advertising `session.notices` makes both adapters route their ADVISORY
-    // records here instead of the AIR lane, so the banner has to keep its rows
-    // or the upgrade is a net loss. Text is adapter-authored and shown
-    // verbatim — unlike the localized `configOptionAdjusted` above.
+  it("raises a notice as a notification kept in the alert list, and stores nothing", async () => {
+    // A notice is fire-and-forget advisory text. It used to be mirrored into
+    // the failure table as well, so every warning showed twice at once — a
+    // toast AND an amber strip under the composer (then a bogus "Recovered"
+    // line). Now it is a toast, and — for a warning or an error — its entry in
+    // the status-bar alert list, where it can be read again once the toast is
+    // gone. Text is adapter-authored and shown verbatim — unlike the localized
+    // `configOptionAdjusted` above.
     const handlers = await connectGrokOwner()
     h.toastWarning.mockClear()
     h.toastError.mockClear()
     h.toastInfo.mockClear()
+    h.recordAlert.mockClear()
+    h.tCalls = []
 
     emitAcpEvent(handlers, {
       seq: 1,
@@ -2934,11 +3065,21 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
         description: "Switched from gpt-6-astra to gpt-5.6-sol (capacity).",
       },
     })
+    // The title leads with the agent (the mock echoes the key; the values
+    // prove what it was built from), the description rides as its own line.
     expect(h.toastInfo).toHaveBeenCalledWith(
-      "Model rerouted — Switched from gpt-6-astra to gpt-5.6-sol (capacity)."
+      "noticeTitle",
+      expect.objectContaining({
+        id: "acp-notice:spawned-conn:info:Model rerouted",
+        description: "Switched from gpt-6-astra to gpt-5.6-sol (capacity).",
+      })
     )
-    // `info` is toast-only: a reroute does not deserve a persistent row.
-    expect(h.store!.getConnection(TAB)?.sessionFailures ?? []).toHaveLength(0)
+    expect(h.tCalls).toContainEqual([
+      "noticeTitle",
+      { agent: "Grok", title: "Model rerouted" },
+    ])
+    // An FYI has nothing to come back to: toast only.
+    expect(h.recordAlert).not.toHaveBeenCalled()
 
     emitAcpEvent(handlers, {
       seq: 2,
@@ -2946,38 +3087,108 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
       type: "session_notice",
       notice: { severity: "warning", title: "Fast mode turned off" },
     })
-    expect(h.toastWarning).toHaveBeenCalledWith("Fast mode turned off")
-    const table = h.store!.getConnection(TAB)?.sessionFailures ?? []
-    expect(table).toHaveLength(1)
-    expect(table[0]).toMatchObject({
-      severity: "warning",
-      title: "Fast mode turned off",
+    expect(h.toastWarning).toHaveBeenCalledWith("noticeTitle", {
+      id: "acp-notice:spawned-conn:warning:Fast mode turned off",
     })
 
-    // A repeat revises the one row rather than stacking a second — the bug a
-    // fixed revision would cause is the banner freezing on the first text.
     emitAcpEvent(handlers, {
       seq: 3,
       connection_id: "spawned-conn",
       type: "session_notice",
-      notice: {
-        severity: "warning",
-        title: "Fast mode turned off",
-        description: "The selected model does not support it.",
-      },
-    })
-    const revised = h.store!.getConnection(TAB)?.sessionFailures ?? []
-    expect(revised).toHaveLength(1)
-    expect(revised[0].details).toBe("The selected model does not support it.")
-
-    emitAcpEvent(handlers, {
-      seq: 4,
-      connection_id: "spawned-conn",
-      type: "session_notice",
       notice: { severity: "error", title: "Provider degraded" },
     })
-    expect(h.toastError).toHaveBeenCalledWith("Provider degraded")
-    expect(h.store!.getConnection(TAB)?.sessionFailures ?? []).toHaveLength(2)
+    expect(h.toastError).toHaveBeenCalledWith("noticeTitle", {
+      id: "acp-notice:spawned-conn:error:Provider degraded",
+    })
+    expect(h.recordAlert.mock.calls.map(([alert]) => alert)).toEqual([
+      {
+        key: "acp-notice:spawned-conn:warning:Fast mode turned off",
+        level: "warning",
+        message: "noticeTitle",
+      },
+      {
+        key: "acp-notice:spawned-conn:error:Provider degraded",
+        level: "error",
+        message: "noticeTitle",
+      },
+    ])
+
+    // Nothing is stored and nothing is drawn in the composer dock.
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.sessionFailures).toHaveLength(0)
+    expect(conn.error).toBeNull()
+  })
+
+  it("drops notices that only restate a context compaction", async () => {
+    // codex core warns "multiple compactions can cause the model to be less
+    // accurate" after EVERY compaction. The transcript's compaction card is
+    // the surface for compaction — this used to add a toast AND an amber
+    // strip under the composer on top of it.
+    const handlers = await connectGrokOwner()
+    h.toastWarning.mockClear()
+    h.toastInfo.mockClear()
+    h.recordAlert.mockClear()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_notice",
+      notice: {
+        severity: "warning",
+        title:
+          "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.",
+      },
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_notice",
+      notice: {
+        severity: "info",
+        title: "Context compacted",
+        description:
+          "Conversation compacted to fit the model's context window.",
+      },
+    })
+
+    expect(h.toastWarning).not.toHaveBeenCalled()
+    expect(h.toastInfo).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
+    expect(h.store!.getConnection(TAB)!.sessionFailures).toHaveLength(0)
+  })
+
+  it("does not re-announce notices replayed after a reconnect", async () => {
+    // Catching up on a gap re-applies what happened while this client was
+    // away. The store must converge; the toasts must not fire a burst of
+    // stale advisories, nor the alert list fill up with them.
+    const handlers = await connectGrokOwner()
+    h.toastWarning.mockClear()
+    h.recordAlert.mockClear()
+
+    act(() => {
+      handlers.onReplay(
+        [
+          {
+            seq: 1,
+            connection_id: "spawned-conn",
+            type: "session_notice",
+            notice: { severity: "warning", title: "Fast mode turned off" },
+          } as EventEnvelope,
+        ],
+        1
+      )
+    })
+    expect(h.toastWarning).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
+
+    // Live events after the replay announce normally again.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_notice",
+      notice: { severity: "warning", title: "Auto mode unavailable" },
+    })
+    expect(h.toastWarning).toHaveBeenCalledTimes(1)
   })
 
   it("stays silent for option snapshots nobody asked for", async () => {
@@ -3248,13 +3459,12 @@ describe("empty-turn error diagnostics", () => {
     )
   })
 
-  it("routes details to the alert's evidence slot, keeping them out of detail, conn.error and the OS notification", async () => {
+  it("keeps evidence for the alert list — out of conn.error, the toast and the OS notification", async () => {
     const handlers = await connectOwner()
-    h.pushAlert.mockClear()
     h.notifyDesktop.mockClear()
 
     const details =
-      "dropped 1 update(s) (0 decode, 1 dispatch)\nstderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
+      "dropped 1 unreadable update(s)\nstderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
     emitAcpEvent(handlers, {
       seq: 1,
       connection_id: "spawned-conn",
@@ -3265,20 +3475,24 @@ describe("empty-turn error diagnostics", () => {
       details,
     })
 
-    // The evidence rides its own slot so `StatusBarAlerts` can put it behind an
-    // expander; the always-visible detail slot stays the localized line.
-    const alertCalls = h.pushAlert.mock.calls
-    const [, , alertDetail, , alertEvidence] =
-      alertCalls[alertCalls.length - 1]!
-    expect(alertDetail).toBe("backendErrors.turnFailedEmptyProtocol")
-    expect(alertEvidence).toBe(details)
+    // `conn.error` is the session's standing error (the connection-status
+    // popover): the localized line, alone.
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.error).toBe("backendErrors.turnFailedEmptyProtocol")
+    expect(conn.errorLevel).toBe("error")
 
-    // `conn.error` feeds the composer tooltip — the localized line plus a
-    // pointer at the only surface that can expand the evidence, never the
-    // evidence itself.
-    expect(h.store!.getConnection(TAB)!.error).toBe(
-      "backendErrors.turnFailedEmptyProtocol backendErrors.detailsInAlerts"
+    // The notification: the same line as a toast — machine output never goes
+    // there — and in the alert list with the evidence behind its disclosure.
+    expect(h.toastError).toHaveBeenCalledWith(
+      "backendErrors.turnFailedEmptyProtocol",
+      { id: expect.stringMatching(/^acp-turn-failure:spawned-conn:/) }
     )
+    expect(h.recordAlert).toHaveBeenCalledWith({
+      key: expect.stringMatching(/^acp-turn-failure:spawned-conn:/),
+      level: "error",
+      message: "backendErrors.turnFailedEmptyProtocol",
+      evidence: details,
+    })
 
     // Notification centers persist their payload outside the app.
     const notifyCalls = h.notifyDesktop.mock.calls
@@ -3288,7 +3502,6 @@ describe("empty-turn error diagnostics", () => {
 
   it("omits blank details rather than rendering an empty block", async () => {
     const handlers = await connectOwner()
-    h.pushAlert.mockClear()
 
     emitAcpEvent(handlers, {
       seq: 1,
@@ -3300,16 +3513,134 @@ describe("empty-turn error diagnostics", () => {
       details: "   \n  ",
     })
 
-    const alertCalls = h.pushAlert.mock.calls
-    const [, , alertDetail, , alertEvidence] =
-      alertCalls[alertCalls.length - 1]!
-    expect(alertDetail).toBe("backendErrors.turnFailedEmpty")
-    expect(alertEvidence).toBeUndefined()
-    // Nothing to expand, so the tooltip must not send the user looking for an
-    // expander.
     expect(h.store!.getConnection(TAB)!.error).toBe(
       "backendErrors.turnFailedEmpty"
     )
+    expect(h.recordAlert).toHaveBeenCalledTimes(1)
+    expect(h.recordAlert.mock.calls[0][0]).not.toHaveProperty("evidence")
+  })
+
+  it("notifies the verdict on a click — and leaves no standing error behind", async () => {
+    // A refused mode switch is not a broken session: no session error, no OS
+    // notification — one notification, localized, with the backend's reason
+    // as its second line.
+    const handlers = await connectOwner()
+    h.notifyDesktop.mockClear()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "Failed to set mode: Invalid params",
+      agent_type: "claude_code",
+      code: "set_mode_failed",
+    })
+
+    expect(h.toastError).toHaveBeenCalledWith(
+      "backendErrors.setModeFailed",
+      expect.objectContaining({
+        description: "Failed to set mode: Invalid params",
+        id: "acp-error:spawned-conn:set_mode_failed",
+      })
+    )
+    expect(h.recordAlert).toHaveBeenCalledWith({
+      key: "acp-error:spawned-conn:set_mode_failed",
+      level: "error",
+      message: "backendErrors.setModeFailed",
+      detail: "Failed to set mode: Invalid params",
+    })
+    expect(h.store!.getConnection(TAB)!.error).toBeNull()
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+  })
+
+  it("notifies a restored-as-new session as a warning and keeps it as the session's state", async () => {
+    const handlers = await connectOwner()
+    h.notifyDesktop.mockClear()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "Failed to load session, starting new: Internal error",
+      agent_type: "claude_code",
+      code: "session_load_fallback",
+    })
+
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.error).toBe("backendErrors.sessionLoadFallback")
+    expect(conn.errorLevel).toBe("warning")
+    expect(h.toastWarning).toHaveBeenCalledWith(
+      "backendErrors.sessionLoadFallback",
+      expect.objectContaining({
+        description: "Failed to load session, starting new: Internal error",
+      })
+    )
+    expect(h.recordAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warning" })
+    )
+    // A warning is not worth an OS notification.
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+  })
+
+  it("keeps one entry per connection and code when the same failure repeats", async () => {
+    const handlers = await connectOwner()
+    for (const seq of [1, 2]) {
+      emitAcpEvent(handlers, {
+        seq,
+        connection_id: "spawned-conn",
+        type: "error",
+        message: "agent process exited",
+        agent_type: "claude_code",
+        code: "process_exited",
+      })
+    }
+    const keys = h.recordAlert.mock.calls.map(([alert]) => alert.key)
+    expect(keys).toEqual([
+      "acp-error:spawned-conn:process_exited",
+      "acp-error:spawned-conn:process_exited",
+    ])
+  })
+
+  it("hydrates a snapshot's error as state — never as a notification", async () => {
+    // It was notified when it happened; a re-attach (or a second client)
+    // learning about it is not news.
+    const handlers = await connectOwner()
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      eventSeq: 5,
+      lastError: "boom",
+    })
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+
+    expect(h.store!.getConnection(TAB)!.error).toBe("boom")
+    expect(h.toastError).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
+  })
+
+  it("draws nothing for a failure the transcript's card already shows", async () => {
+    // grok's failed compaction renders as the compaction card; the coded
+    // `error` beside it exists for the chat-channel bridges, not for the app.
+    const handlers = await connectOwner()
+    h.toastError.mockClear()
+    h.toastWarning.mockClear()
+    h.notifyDesktop.mockClear()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "Context compaction failed: API error (status 503)",
+      agent_type: "grok",
+      code: "compaction_failed",
+    })
+
+    expect(h.store!.getConnection(TAB)!.error).toBeNull()
+    expect(h.toastError).not.toHaveBeenCalled()
+    expect(h.toastWarning).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
   })
 })
 
@@ -3484,31 +3815,10 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
   function snapshotPatch(overrides: {
     eventSeq: number
     lastError: string | null
-    lastErrorDetails?: string | null
+    lastErrorCode?: string | null
     connectionId?: string
   }) {
-    return {
-      connectionId: "spawned-conn",
-      status: "connected",
-      sessionId: null,
-      modes: null,
-      configOptions: null,
-      availableCommands: null,
-      usage: null,
-      liveMessage: null,
-      pendingPermission: null,
-      pendingAskQuestion: null,
-      pendingUserMessage: null,
-      promptCapabilities: null,
-      selectorsReady: false,
-      supportsFork: false,
-      configStale: false,
-      configStaleKind: null,
-      backgroundOutstanding: 0,
-      activeDelegations: [],
-      lastErrorDetails: null,
-      ...overrides,
-    }
+    return { ...snapshotBase(), ...overrides }
   }
 
   async function connectOwner(): Promise<AttachHandlers> {
@@ -3575,77 +3885,91 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
     expect(h.store!.getConnection(TAB)!.error).toBeNull()
   })
 
-  // Alerts are live-only, so a client that attached after the empty turn has
-  // the snapshot as its ONLY channel for the diagnosis.
-  it("raises an alert for snapshot-carried details without touching conn.error or notifications", async () => {
+  // A client that attached after the empty turn has the snapshot as its ONLY
+  // channel for the session's error — it lands exactly like the live event
+  // would have: localized by code.
+  it("presents a snapshot error the way the live event would have", async () => {
     const handlers = await connectOwner()
-    h.pushAlert.mockClear()
     h.notifyDesktop.mockClear()
 
-    const details =
-      "stderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
     h.denormalizeSnapshot.mockReturnValue(
       snapshotPatch({
         eventSeq: 5,
         lastError: "agent ended the turn without producing any response.",
-        lastErrorDetails: details,
+        lastErrorCode: "turn_failed_empty",
       })
     )
     hydrateSnapshot(handlers, {
       event_seq: 5,
     } as unknown as LiveSessionSnapshot)
 
-    const alertCalls = h.pushAlert.mock.calls
-    const [, , alertDetail, , alertEvidence] =
-      alertCalls[alertCalls.length - 1]!
-    expect(alertDetail).toBe(
-      "agent ended the turn without producing any response."
-    )
-    expect(alertEvidence).toBe(details)
-    // The tooltip string stays the single-line message.
-    expect(h.store!.getConnection(TAB)!.error).toBe(
-      "agent ended the turn without producing any response."
-    )
+    const conn = h.store!.getConnection(TAB)!
+    // Localized by code (the mock echoes the key), NOT the raw English text a
+    // refreshed browser used to show instead of what the live client saw.
+    expect(conn.error).toBe("backendErrors.turnFailedEmpty")
+    // History raises nothing — no notification, no OS notification.
+    expect(h.toastError).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
     expect(h.notifyDesktop).not.toHaveBeenCalled()
   })
 
-  it("does not re-alert the same details on every re-attach", async () => {
+  it("keeps a code-less snapshot error verbatim", async () => {
     const handlers = await connectOwner()
-    h.pushAlert.mockClear()
-
-    const patch = snapshotPatch({
-      eventSeq: 5,
-      lastError: "boom",
-      lastErrorDetails: "stderr (this turn, last 1 lines):\n  same evidence",
-    })
-    h.denormalizeSnapshot.mockReturnValue(patch)
-    hydrateSnapshot(handlers, {
-      event_seq: 5,
-    } as unknown as LiveSessionSnapshot)
-    const afterFirst = h.pushAlert.mock.calls.length
-    expect(afterFirst).toBe(1)
-
-    // A reconnect replays the same snapshot.
-    hydrateSnapshot(handlers, {
-      event_seq: 6,
-    } as unknown as LiveSessionSnapshot)
-    expect(h.pushAlert.mock.calls.length).toBe(afterFirst)
-  })
-
-  it("stays silent for snapshot errors that carry no details", async () => {
-    const handlers = await connectOwner()
-    h.pushAlert.mockClear()
-
     h.denormalizeSnapshot.mockReturnValue(
       snapshotPatch({ eventSeq: 5, lastError: "some older error" })
     )
     hydrateSnapshot(handlers, {
       event_seq: 5,
     } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.error).toBe("some older error")
+  })
 
-    // Attaching to a connection with an ordinary past error must not start
-    // raising alerts it never used to.
-    expect(h.pushAlert).not.toHaveBeenCalled()
+  it("never turns a replayed action verdict into the session's error", async () => {
+    // A refused mode switch was a notification when it happened. The backend
+    // still keeps it as `last_error`; a refresh must not make it the session's
+    // standing error.
+    const handlers = await connectOwner()
+    h.toastError.mockClear()
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({
+        eventSeq: 5,
+        lastError: "Failed to set mode: Invalid params",
+        lastErrorCode: "set_mode_failed",
+      })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.error).toBeNull()
+    expect(h.toastError).not.toHaveBeenCalled()
+  })
+
+  it("keeps the session's error when the snapshot's latest was only a click verdict", async () => {
+    // The backend keeps one `last_error`. A mode switch refused AFTER the turn
+    // failed overwrites it there — but says nothing about the failed turn,
+    // whose error this client still holds.
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "raw",
+      agent_type: "claude_code",
+      code: "turn_failed_refusal",
+    })
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({
+        eventSeq: 5,
+        lastError: "Failed to set mode: Invalid params",
+        lastErrorCode: "set_mode_failed",
+      })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.error).toBe(
+      "backendErrors.turnFailedRefusal"
+    )
   })
 })
 
@@ -5351,7 +5675,6 @@ describe("AcpConnectionsProvider mid-turn steering messages", () => {
       backgroundOutstanding: 0,
       activeDelegations: [],
       lastError: null,
-      lastErrorDetails: null,
       eventSeq: 9,
     })
     hydrateSnapshot(handlers, {
@@ -5457,5 +5780,601 @@ describe("connect() is observable while it is still in flight", () => {
     })
     unsub()
     expect(notifications).toContain("not-pending")
+  })
+})
+
+describe("connect failures land on the surface that asked", () => {
+  // A failed connect never produces a store entry, so its reason used to go
+  // only to the status-bar alerts — for a saved conversation the ONLY place it
+  // showed. It is a notification now (a toast, kept in the alert list) with
+  // the fix beside it, and it is published per key for that surface's
+  // connection-status heart.
+
+  /** The toast options a notification was raised with. */
+  function toastOptions(call: unknown[] | undefined) {
+    return call?.[1] as {
+      id: string
+      description?: string
+      action?: { label: string; onClick: () => void }
+      cancel?: { label: string; onClick: () => void }
+    }
+  }
+
+  it("records a blocked agent together with its settings fix", async () => {
+    h.acpGetAgentStatus.mockResolvedValue({
+      agent_type: "claude_code",
+      enabled: true,
+      available: true,
+      installed_version: null,
+      host_tools_agent_mode: false,
+      is_acp_adapter: true,
+    })
+    await mountProvider()
+    await act(async () => {
+      await expect(
+        h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+      ).rejects.toThrow()
+    })
+
+    expect(h.store!.getConnectError(TAB)).toEqual({
+      agentType: "claude_code",
+      title: "blocked.adapterMissing",
+      detail: null,
+      opensAgentSettings: true,
+    })
+    // The preflight stops it before anything is spawned.
+    expect(h.acpConnect).not.toHaveBeenCalled()
+
+    // Notified once, with the way out: the settings page first, a retry second.
+    expect(h.toastError).toHaveBeenCalledTimes(1)
+    expect(h.toastError.mock.calls[0][0]).toBe("blocked.adapterMissing")
+    const options = toastOptions(h.toastError.mock.calls[0])
+    expect(options.id).toBe(`acp-connect:${TAB}`)
+    expect(options.action?.label).toBe("actions.openAgentsSettings")
+    expect(options.cancel?.label).toBe("actions.retry")
+    act(() => options.action!.onClick())
+    expect(h.openSettingsWindow).toHaveBeenCalledWith("agents", {
+      agentType: "claude_code",
+    })
+
+    // The alert list keeps the lasting fix — not the retry, which acts on the
+    // moment and would outlive it there.
+    expect(h.recordAlert).toHaveBeenCalledTimes(1)
+    const alert = h.recordAlert.mock.calls[0][0]
+    expect(alert).toMatchObject({
+      key: `acp-connect:${TAB}`,
+      level: "error",
+      message: "blocked.adapterMissing",
+    })
+    expect(
+      alert.actions.map((action: { label: string }) => action.label)
+    ).toEqual(["actions.openAgentsSettings"])
+  })
+
+  it("records a spawn failure with its reason, and retires it on the next attempt", async () => {
+    h.acpConnect.mockRejectedValueOnce(new Error("spawn claude ENOENT"))
+    await mountProvider()
+    await act(async () => {
+      await expect(
+        h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+      ).rejects.toThrow("spawn claude ENOENT")
+    })
+    expect(h.store!.getConnectError(TAB)).toEqual({
+      agentType: "claude_code",
+      title: "connectFailedTitle",
+      detail: "spawn claude ENOENT",
+      opensAgentSettings: false,
+    })
+    expect(h.toastError).toHaveBeenCalledWith(
+      "connectFailedTitle",
+      expect.objectContaining({ description: "spawn claude ENOENT" })
+    )
+
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    expect(h.store!.getConnectError(TAB)).toBeUndefined()
+    expect(h.store!.getConnection(TAB)?.connectionId).toBe("spawned-conn")
+    // The toast that reported it no longer says what is true.
+    expect(h.toastDismiss).toHaveBeenCalledWith(`acp-connect:${TAB}`)
+  })
+
+  it("retries from the toast only while that failure is still the latest", async () => {
+    h.acpConnect.mockRejectedValue(new Error("boom"))
+    await mountProvider()
+    const failOnce = async () => {
+      h.toastError.mockClear()
+      await act(async () => {
+        await expect(
+          h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+        ).rejects.toThrow("boom")
+      })
+      expect(h.store!.getConnectError(TAB)).toBeDefined()
+      const options = toastOptions(h.toastError.mock.calls[0])
+      // Not a settings problem: Retry is the one way out, so it leads.
+      expect(options.action?.label).toBe("actions.retry")
+      expect(options.cancel).toBeUndefined()
+      expect(options.description).toBe("boom")
+      return options.action!.onClick
+    }
+
+    const retry = await failOnce()
+    h.acpConnect.mockClear()
+    await act(async () => {
+      retry()
+    })
+    expect(h.acpConnect).toHaveBeenCalledTimes(1)
+
+    // Once the surface lets go, the failure is retired — and a click on the
+    // toast it left behind must not spawn an agent for a tab that is gone.
+    const stale = await failOnce()
+    await act(async () => {
+      await h.actions!.disconnect(TAB)
+    })
+    expect(h.store!.getConnectError(TAB)).toBeUndefined()
+    h.acpConnect.mockClear()
+    await act(async () => {
+      stale()
+    })
+    expect(h.acpConnect).not.toHaveBeenCalled()
+  })
+})
+
+// Everything an agent session reports that is NEWS is a notification — a
+// toast, kept in the status-bar alert list — and never a strip under the
+// composer (that dock is kept for progress: the retry line and the in-flight
+// retry incidents). These pin how the AIR lane is told.
+describe("AIR session failures are told as notifications", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  let seq = 0
+  function emit(handlers: AttachHandlers, event: Record<string, unknown>) {
+    seq += 1
+    emitAcpEvent(handlers, {
+      seq,
+      connection_id: "spawned-conn",
+      ...event,
+    } as unknown as EventEnvelope)
+  }
+  function startTurn(handlers: AttachHandlers) {
+    emit(handlers, { type: "status_changed", status: "prompting" })
+  }
+  function failure(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "t1:error",
+      revision: 1,
+      category: "access",
+      severity: "error",
+      title: "Authentication required.",
+      actions: ["login"],
+      ...overrides,
+    }
+  }
+  function toastOptions(call: unknown[] | undefined) {
+    return call?.[1] as {
+      id: string
+      description?: string
+      action?: { label: string; onClick: () => void }
+      cancel?: { label: string; onClick: () => void }
+    }
+  }
+
+  beforeEach(() => {
+    seq = 0
+  })
+
+  it("tells an advisory once — a re-publish of the same words is not news", async () => {
+    const handlers = await connectOwner()
+    const advisory = failure({
+      id: "adv-1",
+      category: "unknown",
+      severity: "warning",
+      title: "Model fallback",
+      details: "Switched to claude-sonnet.",
+      actions: [],
+    })
+    emit(handlers, { type: "session_failure", record: advisory })
+    emit(handlers, {
+      type: "session_failure",
+      record: { ...advisory, revision: 2 },
+    })
+
+    expect(h.toastWarning).toHaveBeenCalledTimes(1)
+    expect(h.toastWarning).toHaveBeenCalledWith(
+      "noticeTitle",
+      expect.objectContaining({
+        id: "acp-failure:spawned-conn:adv-1",
+        description: "Switched to claude-sonnet.",
+      })
+    )
+    expect(h.tCalls).toContainEqual([
+      "noticeTitle",
+      { agent: "Claude Code", title: "Model fallback" },
+    ])
+    expect(h.recordAlert).toHaveBeenCalledTimes(1)
+    expect(h.recordAlert).toHaveBeenCalledWith({
+      key: "acp-failure:spawned-conn:adv-1",
+      level: "warning",
+      message: "noticeTitle",
+      detail: "Switched to claude-sonnet.",
+    })
+  })
+
+  it("never tells a retry incident — the dock draws that one live", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({
+        severity: "warning",
+        category: "connection",
+        title: "Reconnecting... 1/5",
+        actions: [],
+      }),
+    })
+    expect(h.toastWarning).not.toHaveBeenCalled()
+    expect(h.toastError).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
+    expect(h.store!.getConnection(TAB)!.sessionFailures).toHaveLength(1)
+  })
+
+  it("tells a terminal failure with its sign-in button, in the toast and the list", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, { type: "session_failure", record: failure() })
+
+    expect(h.toastError).toHaveBeenCalledTimes(1)
+    const options = toastOptions(h.toastError.mock.calls[0])
+    expect(options.id).toMatch(/^acp-turn-failure:spawned-conn:/)
+    expect(options.action?.label).toBe("action.login")
+    act(() => options.action!.onClick())
+    expect(h.openSettingsWindow).toHaveBeenCalledWith("agents", {
+      agentType: "claude_code",
+    })
+
+    const alert = h.recordAlert.mock.calls[0][0]
+    expect(alert).toMatchObject({ key: options.id, level: "error" })
+    expect(
+      alert.actions.map((action: { label: string }) => action.label)
+    ).toEqual(["action.login"])
+  })
+
+  it("offers retry / new session only while the conversation view answers them", async () => {
+    const handlers = await connectOwner()
+    const record = failure({
+      category: "connection",
+      title: "The connection to Claude was lost.",
+      actions: ["retry", "new_session"],
+    })
+
+    // No view registered: those buttons would do nothing, so there are none.
+    startTurn(handlers)
+    emit(handlers, { type: "session_failure", record })
+    expect(toastOptions(h.toastError.mock.calls[0]).action).toBeUndefined()
+
+    const handler = vi.fn()
+    let unregister = () => {}
+    act(() => {
+      unregister = h.actions!.registerSessionFailureActions(TAB, handler)
+    })
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: { ...record, revision: 2 },
+    })
+    const options = toastOptions(h.toastError.mock.calls[1])
+    expect(options.action?.label).toBe("action.retry")
+    expect(options.cancel?.label).toBe("action.newSession")
+    act(() => options.action!.onClick())
+    expect(handler).toHaveBeenCalledWith("retry")
+    act(() => options.cancel!.onClick())
+    expect(handler).toHaveBeenCalledWith("new_session")
+    // They act on the moment — the alert list never carries them.
+    expect(h.recordAlert.mock.calls[1][0]).not.toHaveProperty("actions")
+
+    // Once the view is gone, a click on the toast it left behind is inert.
+    handler.mockClear()
+    act(() => unregister())
+    act(() => options.action!.onClick())
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it("tells one failed turn once — the typed record first, then codeg's verdict", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, { type: "session_failure", record: failure() })
+    emit(handlers, {
+      type: "error",
+      message: "raw",
+      agent_type: "claude_code",
+      code: "turn_failed_auth_required",
+      details: "stderr (this turn, last 1 lines):\n  401",
+    })
+
+    // One toast: the typed account, with its button.
+    expect(h.toastError).toHaveBeenCalledTimes(1)
+    const key = toastOptions(h.toastError.mock.calls[0]).id
+    // One entry: the verdict only lends it its evidence.
+    const alerts = h.recordAlert.mock.calls.map(([alert]) => alert)
+    expect(alerts.map((alert) => alert.key)).toEqual([key, key])
+    expect(alerts[1]).toMatchObject({
+      message: "noticeTitle",
+      evidence: "stderr (this turn, last 1 lines):\n  401",
+    })
+    expect(
+      alerts[1].actions.map((action: { label: string }) => action.label)
+    ).toEqual(["action.login"])
+    // The session's error still says what happened, for the status popover.
+    expect(h.store!.getConnection(TAB)!.error).toBe(
+      "backendErrors.turnFailedAuthRequired"
+    )
+  })
+
+  it("tells one failed turn once — codeg's verdict first, then the typed record", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, {
+      type: "error",
+      message: "raw",
+      agent_type: "claude_code",
+      code: "turn_failed_empty",
+      details: "stderr tail",
+    })
+    emit(handlers, { type: "session_failure", record: failure() })
+
+    // The typed record UPDATES the toast on screen (same id) with its wording
+    // and button, instead of raising a second one.
+    expect(h.toastError).toHaveBeenCalledTimes(2)
+    const [first, second] = h.toastError.mock.calls
+    expect(first[0]).toBe("backendErrors.turnFailedEmpty")
+    expect(second[0]).toBe("noticeTitle")
+    expect(toastOptions(second).id).toBe(toastOptions(first).id)
+    expect(toastOptions(second).action?.label).toBe("action.login")
+    // …and replaces the list entry, keeping the verdict's evidence.
+    const last = h.recordAlert.mock.calls[1][0]
+    expect(last).toMatchObject({
+      key: toastOptions(first).id,
+      message: "noticeTitle",
+      evidence: "stderr tail",
+    })
+  })
+
+  it("tells two failures of one turn apart, and joins the verdict to the latest", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({ id: "a", title: "Transport lost." }),
+    })
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({ id: "b", title: "Authentication required." }),
+    })
+    // Neither overwrites the other: two toasts, two entries.
+    const [first, second] = h.toastError.mock.calls
+    expect(toastOptions(second).id).not.toBe(toastOptions(first).id)
+
+    emit(handlers, {
+      type: "error",
+      message: "raw",
+      agent_type: "claude_code",
+      code: "turn_failed_auth_required",
+      details: "stderr tail",
+    })
+    // The verdict raises nothing new; it lends its evidence to the latest.
+    expect(h.toastError).toHaveBeenCalledTimes(2)
+    const last =
+      h.recordAlert.mock.calls[h.recordAlert.mock.calls.length - 1][0]
+    expect(last).toMatchObject({
+      key: toastOptions(second).id,
+      evidence: "stderr tail",
+    })
+  })
+
+  it("updates a failure's notification in place when its record is revised", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, { type: "session_failure", record: failure() })
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({ revision: 2, details: "Your session expired." }),
+    })
+    const [first, second] = h.toastError.mock.calls
+    expect(toastOptions(second).id).toBe(toastOptions(first).id)
+    expect(toastOptions(second).description).toBe("Your session expired.")
+  })
+
+  it("keeps one failure one notification when another surface on its connection closes", async () => {
+    // The owner's tab and a canvas card share the connection. Closing the card
+    // must not cut the failed turn in two — a second toast for its verdict.
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    const owner = latestAttachHandlers()
+    h.acpFindConnectionForConversation.mockResolvedValue({
+      connection_id: "spawned-conn",
+      event_seq: 0,
+    })
+    await act(async () => {
+      await h.actions!.connect(
+        "canvas-7",
+        "claude_code",
+        "/tmp/x",
+        "sess-1",
+        42
+      )
+    })
+    expect(h.store!.getConnection("canvas-7")?.isViewer).toBe(true)
+
+    startTurn(owner)
+    emit(owner, { type: "session_failure", record: failure() })
+    await act(async () => {
+      await h.actions!.disconnect("canvas-7")
+    })
+    emit(owner, {
+      type: "error",
+      message: "raw",
+      agent_type: "claude_code",
+      code: "turn_failed_auth_required",
+      details: "stderr tail",
+    })
+
+    expect(h.toastError).toHaveBeenCalledTimes(1)
+    const alerts = h.recordAlert.mock.calls.map(([alert]) => alert)
+    expect(new Set(alerts.map((alert) => alert.key)).size).toBe(1)
+    // The verdict still joined it — it was not dropped.
+    expect(alerts[alerts.length - 1]).toMatchObject({ evidence: "stderr tail" })
+    // …and the toast stays: the owner is still looking at that failure.
+    expect(h.toastDismiss).not.toHaveBeenCalled()
+  })
+
+  it("retires a connection's failure toasts when its owner lets go, viewers or not", async () => {
+    // The owner's teardown kills the agent: the failure's toast and its
+    // buttons are over even while a viewer surface is still attached.
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    const owner = latestAttachHandlers()
+    h.acpFindConnectionForConversation.mockResolvedValue({
+      connection_id: "spawned-conn",
+      event_seq: 0,
+    })
+    await act(async () => {
+      await h.actions!.connect(
+        "canvas-7",
+        "claude_code",
+        "/tmp/x",
+        "sess-1",
+        42
+      )
+    })
+
+    startTurn(owner)
+    emit(owner, { type: "session_failure", record: failure() })
+    const key = toastOptions(h.toastError.mock.calls[0]).id
+    await act(async () => {
+      await h.actions!.disconnect(TAB)
+    })
+    expect(h.toastDismiss).toHaveBeenCalledWith(key)
+  })
+
+  it("retires a failed turn's toast and disarms its buttons when the next prompt starts", async () => {
+    // Clicking the old toast's Retry after the user moved on would re-send
+    // whatever the LATEST prompt is — the turn that is running now.
+    const handlers = await connectOwner()
+    const handler = vi.fn()
+    act(() => {
+      h.actions!.registerSessionFailureActions(TAB, handler)
+    })
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({ actions: ["retry"] }),
+    })
+    const options = toastOptions(h.toastError.mock.calls[0])
+    expect(options.action?.label).toBe("action.retry")
+
+    startTurn(handlers)
+    expect(h.toastDismiss).toHaveBeenCalledWith(options.id)
+    act(() => options.action!.onClick())
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it("starts a new notification with the next prompt", async () => {
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, { type: "session_failure", record: failure() })
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({ revision: 2 }),
+    })
+    const [first, second] = h.toastError.mock.calls
+    expect(toastOptions(second).id).not.toBe(toastOptions(first).id)
+  })
+
+  it("tells a viewer what happened, without the owner's recovery buttons", async () => {
+    // A viewer watches another client's session; recovering it is the owner's
+    // call (the same gate as goal control).
+    h.acpFindConnectionForConversation.mockResolvedValue({
+      connection_id: "owner-conn",
+      event_seq: 5,
+    })
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    const handlers = latestAttachHandlers()
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.isViewer).toBe(true)
+
+    emitAcpEvent(handlers, {
+      seq: 6,
+      connection_id: "owner-conn",
+      type: "session_failure",
+      record: failure(),
+    } as unknown as EventEnvelope)
+
+    expect(h.toastError).toHaveBeenCalledTimes(1)
+    expect(toastOptions(h.toastError.mock.calls[0]).action).toBeUndefined()
+    expect(h.recordAlert.mock.calls[0][0]).not.toHaveProperty("actions")
+  })
+
+  it("heads a failure passed through whole with its first line", async () => {
+    // codex titles a failure record with the upstream error message itself,
+    // body and all.
+    const handlers = await connectOwner()
+    startTurn(handlers)
+    emit(handlers, {
+      type: "session_failure",
+      record: failure({
+        category: "service",
+        title: 'unexpected status 503: {\n  "error": "overloaded"\n}',
+        details: "Try again later.",
+        actions: [],
+      }),
+    })
+    expect(h.tCalls).toContainEqual([
+      "noticeTitle",
+      { agent: "Claude Code", title: "unexpected status 503: {" },
+    ])
+    expect(toastOptions(h.toastError.mock.calls[0]).description).toBe(
+      '"error": "overloaded"\n}\nTry again later.'
+    )
+  })
+
+  it("does not re-announce failures replayed after a reconnect", async () => {
+    const handlers = await connectOwner()
+    act(() => {
+      handlers.onReplay(
+        [
+          {
+            seq: 1,
+            connection_id: "spawned-conn",
+            type: "session_failure",
+            record: failure(),
+          } as unknown as EventEnvelope,
+        ],
+        1
+      )
+    })
+    // The store caught up…
+    expect(h.store!.getConnection(TAB)!.sessionFailures).toHaveLength(1)
+    // …without a burst of stale notifications.
+    expect(h.toastError).not.toHaveBeenCalled()
+    expect(h.recordAlert).not.toHaveBeenCalled()
   })
 })

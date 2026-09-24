@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
   return {
     handlers,
     unsubscribed,
+    remoteDesktop: false,
     capabilities: vi.fn(
       (): Promise<BrowserCapabilities> =>
         Promise.resolve({
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => {
           profiles: false,
           signInUserAgent: false,
           ownedWindowControls: false,
+          remoteEgress: false,
           policy: { enabled: true, managedRules: [], managedSource: null },
         })
     ),
@@ -81,8 +83,9 @@ vi.mock("@/lib/browser/browser-api", () => ({
   browserAnswerOpenRequest: mocks.browserAnswerOpenRequest,
 }))
 vi.mock("@/lib/transport", () => ({
-  getTransport: () => ({ subscribe: mocks.subscribe }),
+  getShellTransport: () => ({ subscribe: mocks.subscribe }),
   isDesktop: () => true,
+  isRemoteDesktopMode: () => mocks.remoteDesktop,
 }))
 vi.mock("@/contexts/workspace-context", () => ({
   useWorkspaceActions: () => ({
@@ -113,6 +116,10 @@ import {
   getBrowserDownloads,
   resetBrowserDownloadsForTests,
 } from "@/lib/browser/browser-downloads-store"
+import {
+  resetBrowserEgressStoreForTests,
+  useBrowserEgressStatus,
+} from "@/lib/browser/browser-egress-store"
 import { BrowserEventsBridge } from "./browser-events-bridge"
 
 /** The store's bounds-resync counter for a tab, read as a component would. */
@@ -140,6 +147,8 @@ async function flush() {
 
 describe("BrowserEventsBridge", () => {
   beforeEach(() => {
+    mocks.remoteDesktop = false
+    resetBrowserEgressStoreForTests()
     mocks.handlers.clear()
     mocks.unsubscribed.length = 0
     mocks.subscribe.mockClear()
@@ -177,12 +186,27 @@ describe("BrowserEventsBridge", () => {
       "browser://devtools-closed",
       "browser://doc-state",
       "browser://download",
+      "browser://egress",
       "browser://navigation-blocked",
       "browser://open-request",
       "browser://popup",
       "browser://shortcut",
       "browser://state",
     ])
+    // A remote connection's tunnel, as the banners over its tabs read it.
+    const egress = renderHook(() => useBrowserEgressStatus(4))
+    expect(egress.result.current).toBeNull()
+    act(() => {
+      mocks.handlers.get("browser://egress")!({
+        connectionId: 4,
+        status: { state: "down", reason: "the tunnel closed" },
+      })
+    })
+    expect(egress.result.current).toEqual({
+      state: "down",
+      reason: "the tunnel closed",
+    })
+    egress.unmount()
     // Downloads already running when this document mounted are shown again.
     expect(getBrowserDownloads().map((d) => d.id)).toEqual(["dl-1"])
     mocks.handlers.get("browser://download")!({
@@ -444,6 +468,7 @@ describe("BrowserEventsBridge", () => {
       "browser://devtools-closed",
       "browser://doc-state",
       "browser://download",
+      "browser://egress",
       "browser://navigation-blocked",
       "browser://open-request",
       "browser://popup",
@@ -466,6 +491,7 @@ describe("BrowserEventsBridge", () => {
       profiles: false,
       signInUserAgent: false,
       ownedWindowControls: false,
+      remoteEgress: false,
       policy: { enabled: true, managedRules: [], managedSource: null },
     })
     render(<BrowserEventsBridge />)
@@ -605,6 +631,99 @@ describe("BrowserEventsBridge", () => {
     expect(mocks.browserAgentGrant).toHaveBeenCalledWith("abc", "control")
   })
 
+  // A remote workspace window has its own bridge now: a popup opened in one
+  // window must not become a tab of every other one.
+  it("takes in only the popups whose opener lives in this window", async () => {
+    render(<BrowserEventsBridge />)
+    await flush()
+    const popupState = (tabId: string, ownerWindow: string) => ({
+      tabId,
+      ownerWindow,
+      kind: "page",
+      surface: "child",
+      channel: "native",
+      channelError: null,
+      url: "",
+      requestedUrl: "https://example.com/popup",
+      title: "",
+      favicon: null,
+      loading: true,
+      canGoBack: false,
+      canGoForward: false,
+      origin: null,
+      zoom: 1,
+      error: null,
+      remoteHost: null,
+      openerTabId: "abc",
+      profile: "default",
+      agentGrant: null,
+    })
+    const popup = (tabId: string) => ({
+      presentation: "adopted",
+      openerTabId: "abc",
+      profile: "default",
+      tabId,
+      url: "https://example.com/popup",
+      requestedSize: null,
+      reason: null,
+    })
+    // The backend sends the popup's state first; it names the opener's window.
+    mocks.handlers.get("browser://state")!(
+      popupState("abc-p1", "remote-workspace-3")
+    )
+    mocks.handlers.get("browser://popup")!(popup("abc-p1"))
+    expect(mocks.adoptBrowserTab).not.toHaveBeenCalled()
+
+    mocks.handlers.get("browser://state")!(popupState("abc-p2", "main"))
+    mocks.handlers.get("browser://popup")!(popup("abc-p2"))
+    expect(mocks.adoptBrowserTab).toHaveBeenCalledTimes(1)
+    expect(mocks.adoptBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({ backendTabId: "abc-p2" })
+    )
+
+    // No state for the popup itself: its opener's says whose it is.
+    mocks.handlers.get("browser://state")!({
+      ...popupState("xyz", "remote-workspace-3"),
+      openerTabId: null,
+    })
+    mocks.handlers.get("browser://popup")!({
+      ...popup("xyz-p1"),
+      openerTabId: "xyz",
+    })
+    expect(mocks.adoptBrowserTab).toHaveBeenCalledTimes(1)
+  })
+
+  // The window's agents run on the remote host and cannot reach this browser:
+  // the standing default would only hand the page to another window's agents.
+  it("shares nothing at the standing default in a remote workspace window", async () => {
+    mocks.remoteDesktop = true
+    render(<BrowserEventsBridge />)
+    await flush()
+    mocks.handlers.get("browser://state")!({
+      tabId: "abc",
+      ownerWindow: "main",
+      kind: "page",
+      surface: "child",
+      channel: "native",
+      channelError: null,
+      url: "https://example.com/",
+      requestedUrl: "https://example.com/",
+      title: "Example",
+      favicon: null,
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      origin: "https://example.com",
+      zoom: 1,
+      error: null,
+      remoteHost: null,
+      openerTabId: null,
+      profile: "default",
+      agentGrant: null,
+    })
+    expect(mocks.browserAgentGrant).not.toHaveBeenCalled()
+  })
+
   // The tab never moved, so nothing else on screen changed: the toolbar still
   // shows the address the user shared. That is exactly why it needs its own
   // notice rather than being folded into the one above.
@@ -680,6 +799,7 @@ describe("BrowserEventsBridge", () => {
         profiles: false,
         signInUserAgent: false,
         ownedWindowControls: false,
+        remoteEgress: false,
         policy: { enabled: true, managedRules: [], managedSource: null },
       })
       await Promise.resolve()

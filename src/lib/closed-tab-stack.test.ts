@@ -171,6 +171,25 @@ describe("closed tab stack", () => {
     })
   })
 
+  it("records a remote browser tab as remote", () => {
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:r",
+          folderId: 3,
+          browser: { profile: "default", remote: true },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({
+      kind: "browser",
+      url: "http://localhost:3000/",
+      remote: true,
+    })
+  })
+
   // A diff tab carries the path it compares, but reopening goes through
   // `openFilePreview` — restoring one would silently swap the diff for the
   // source editor, so it is not recorded at all.

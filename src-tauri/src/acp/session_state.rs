@@ -1387,11 +1387,9 @@ impl SessionState {
                 // state, it has missed an event, and re-raising a past toast on
                 // every attach would be worse than silence.
                 //
-                // The frontend's own mirror of `warning`/`error` notices into
-                // `session_failures` is a CLIENT-side presentation choice and
-                // stays there on purpose: mirroring here too would make the
-                // synthetic records outlive the window that raised them and
-                // come back on every snapshot.
+                // How a notice is presented (a toast, kept in the client's own
+                // alert list) is the client's business: storing one here
+                // would bring it back on every snapshot.
             }
             AcpEvent::AsyncTask { delta } => {
                 // The SAME merge the frontend reducer applies, so a client

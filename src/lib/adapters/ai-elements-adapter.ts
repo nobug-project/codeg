@@ -37,11 +37,19 @@ import {
   unwrapReferenceDestination,
 } from "@/lib/reference-link"
 import { imageCardLabel } from "@/lib/image-tool-label"
+import {
+  readPageHandoffBlock,
+  type PageHandoffBlock,
+} from "@/lib/browser/page-handoff-block"
 // The composer's own serialization of a reference badge, so a badge rebuilt
 // here is the same inline token the transcript already knows how to parse —
 // including the escaping, which decides whether a label containing `]` or `)`
 // survives the round trip.
 import { referenceToMarkdown } from "@/components/chat/composer/reference-text"
+import {
+  embeddedReferenceUriFor,
+  refOfEmbeddedReferenceUri,
+} from "@/components/chat/composer/reference-uri"
 
 /**
  * Adapted content part types for AI SDK Elements components
@@ -229,6 +237,11 @@ export interface AdaptedMessage {
 export interface AdapterMessageText {
   attachedResources: string
   toolCallFailed: string
+  /** The composer's name for something the built-in browser handed over
+   *  (`usePageHandoffName`): an agent's record of the message keeps the block
+   *  and not the badge, so this is how a message read back from it names the
+   *  badge the way it was named when it was sent. */
+  pageHandoffName: (handoff: PageHandoffBlock) => string
 }
 
 type InlineToolSegment =
@@ -1062,11 +1075,22 @@ function handleMarkdownLink(
     // attached file, so it is COPIED to the row too (kept inline as its inert
     // badge). Other codeg refs are not attachments: inline only.
     if (normalizedUri.toLowerCase().startsWith("codeg://embedded/")) {
-      addResource(resources, {
-        name: unescapeReferenceLabel(normalizedLabel) || "attachment",
-        uri: normalizedUri,
-        mime_type: null,
-      })
+      // One whose uri carries the ref of the block behind it — a page the
+      // built-in browser handed over — is listed by that ref, as the page it
+      // came from: the badge in the prose already says what it is, and this is
+      // the chip the same message gets when it is read back from the agent's
+      // record, which knows the block and not the badge.
+      const ref = refOfEmbeddedReferenceUri(normalizedUri)
+      addResource(
+        resources,
+        ref
+          ? embeddedChip(ref)
+          : {
+              name: unescapeReferenceLabel(normalizedLabel) || "attachment",
+              uri: normalizedUri,
+              mime_type: null,
+            }
+      )
     }
     return match
   }
@@ -1116,10 +1140,11 @@ function handleMarkdownLink(
  * typed cannot reach forward to a real block's closer and take the prose in
  * between with it. `\r?` because nothing between the composer and here
  * promises to have left the line endings alone, and a block that fails to
- * match is a wall of text on screen.
+ * match is a wall of text on screen. The body is captured after the ref: a
+ * block the built-in browser wrote says in it what was handed over.
  */
 const EMBEDDED_CONTEXT_RE =
-  /(?:\r?\n)*<context ref="([^"\r\n]*)">\r?\n(?:(?!<context ref=")[\s\S])*?\r?\n<\/context>/g
+  /(?:\r?\n)*<context ref="([^"\r\n]*)">\r?\n((?:(?!<context ref=")[\s\S])*?)\r?\n<\/context>/g
 
 /** A ``` fence opener, at the start of a line and indented like CommonMark
  *  allows. */
@@ -1143,27 +1168,26 @@ function insideFence(text: string, index: number): boolean {
   return fences % 2 === 1
 }
 
-/** The line the built-in browser's hand-off block names what was picked on
- *  (`browser/handoff.rs`, `render_element`). */
-const ELEMENT_LINE_RE = /^- element: (.+)$/m
-
 /**
  * What the composer's badge said, recovered from the block itself.
  *
- * For a picked element that is exact: the badge's label and the block's
- * `- element:` line are the same string, so a message re-read from history
- * names its attachment the way it did while it was being written. A screenshot
- * or a page's console lines carry no such line — their badge was named in the
- * app's own language, which is nowhere in the block — so those fall back to the
- * address, which is at least the same page.
+ * A block the built-in browser wrote says what was handed over: a picked
+ * element by the very label its badge had, a screenshot or a page's console
+ * lines by kind — and the badge for a kind was the composer's name for it, in
+ * the app's own language, which is why that name is asked for rather than read.
+ * A message re-read from history names its attachment the way it did while it
+ * was being written.
  *
  * A block that has never been near the browser (a pasted file with no path on
- * disk) falls back the same way, to its file name.
+ * disk) is named by its ref, which for that is its file name.
  */
-function embeddedContextName(uri: string, body: string): string {
-  const element = ELEMENT_LINE_RE.exec(body)?.[1]?.trim()
-  if (element) return element
-  return embeddedRefName(uri)
+function embeddedContextName(
+  ref: string,
+  body: string,
+  nameHandoff: AdapterMessageText["pageHandoffName"]
+): string {
+  const handoff = readPageHandoffBlock(body)
+  return handoff ? nameHandoff(handoff) : embeddedRefName(ref)
 }
 
 /** Whatever of a ref a person would recognise on a chip: the site and path for
@@ -1189,26 +1213,56 @@ function embeddedRefName(uri: string): string {
 }
 
 /**
- * The display uri an embedded attachment's badge and chip carry.
+ * The chip an embedded attachment is listed under below the message.
  *
- * The same `codeg://embedded/…` shape the composer mints for one
- * (`buildEmbeddedReferenceUri`), so the transcript renders the rebuilt badge
- * through exactly the same branch: an inert file badge, never a link to
- * anywhere. Built from the ref rather than a fresh id so the badge and the
- * block's own chip land on one entry instead of two.
+ * For a web page, its site — the badge in the prose already says what was
+ * taken from it, and the chip says where from, so it carries the host alone
+ * (an address's path and query run long and say little at a glance). Keyed by
+ * the site's display uri ({@link embeddedReferenceUriFor}), not by any one
+ * badge: the badge and the block it stands for land on one chip, and so does
+ * everything taken from one site. Anything else is named after its ref.
  */
-function embeddedDisplayUri(ref: string): string {
-  return `codeg://embedded/${encodeURIComponent(ref)}`
+function embeddedChip(ref: string): UserResourceDisplay {
+  const site = webSiteOf(ref)
+  return site
+    ? {
+        name: site.host,
+        uri: embeddedReferenceUriFor(site.origin),
+        mime_type: null,
+      }
+    : {
+        name: embeddedRefName(ref),
+        uri: embeddedReferenceUriFor(ref),
+        mime_type: null,
+      }
 }
 
-/** The badge the composer showed in place of an embedded attachment, written
- *  back as the inline token the transcript parses into one. */
+/** The host (with its port) and origin of an http(s) address, or null. */
+function webSiteOf(uri: string): { host: string; origin: string } | null {
+  try {
+    const url = new URL(uri)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null
+    return url.host ? { host: url.host, origin: url.origin } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The badge the composer showed in place of an embedded attachment, written
+ * back as the inline token the transcript parses into one.
+ *
+ * Its uri is the same `codeg://embedded/…` shape the composer mints for one
+ * (`buildEmbeddedReferenceUri`), carrying the ref the way the composer's own
+ * badge for a page does, so the transcript renders the rebuilt badge through
+ * exactly the same branch: an inert file badge, never a link to anywhere.
+ */
 function embeddedBadge(name: string, ref: string): string {
   return referenceToMarkdown({
     refType: "file",
     id: name,
     label: name,
-    uri: embeddedDisplayUri(ref),
+    uri: embeddedReferenceUriFor(ref),
     meta: { fileKind: "file" },
   })
 }
@@ -1221,46 +1275,78 @@ function liftEmbeddedContext(
 ): string {
   return text.replace(
     EMBEDDED_CONTEXT_RE,
-    (match: string, ref: string, offset: number) => {
+    (match: string, ref: string, _body: string, offset: number) => {
       const uri = ref.trim()
-      const name = uri ? embeddedContextName(uri, match) : ""
       // A block naming nothing leaves nothing to put on a chip, and dropping
       // it would be deleting content with no trace of it anywhere. Left in
       // place — as is one inside a code fence, which is a person quoting the
       // shape rather than an agent reporting a prompt.
-      if (!name || insideFence(text, offset)) return match
-      addResource(resources, {
-        name,
-        uri: embeddedDisplayUri(uri),
-        mime_type: null,
-      })
+      if (!uri || insideFence(text, offset)) return match
+      addResource(resources, embeddedChip(uri))
       return ""
     }
   )
 }
 
 /**
- * Every embedded attachment in one user turn, by the ref its block names.
+ * Every embedded attachment in one user turn: for each ref its blocks name,
+ * the names of those blocks, in the order they come.
  *
  * One `resource` block reaches an agent's own record of the prompt as TWO
  * pieces — the ACP adapter writes the bare uri where the badge was and appends
  * the block at the end of the message — so the two have to be read together:
- * on its own, that uri is indistinguishable from a link the person typed.
+ * on its own, that uri is indistinguishable from a link the person typed. Both
+ * pieces keep the order the blocks were sent in, which is what lets two things
+ * taken from one page (a screenshot and an element) keep a name each instead of
+ * both being named after the first.
  */
 function embeddedAttachmentNames(
-  parts: AdaptedContentPart[]
-): Map<string, string> {
-  const found = new Map<string, string>()
+  parts: AdaptedContentPart[],
+  nameHandoff: AdapterMessageText["pageHandoffName"]
+): Map<string, string[]> {
+  const found = new Map<string, string[]>()
   for (const part of parts) {
     if (part.type !== "text") continue
     EMBEDDED_CONTEXT_RE.lastIndex = 0
     for (const match of part.text.matchAll(EMBEDDED_CONTEXT_RE)) {
       const ref = (match[1] ?? "").trim()
       if (!ref || insideFence(part.text, match.index ?? 0)) continue
-      if (!found.has(ref)) found.set(ref, embeddedContextName(ref, match[0]))
+      const names = found.get(ref) ?? []
+      names.push(embeddedContextName(ref, match[2] ?? "", nameHandoff))
+      found.set(ref, names)
     }
   }
   return found
+}
+
+/**
+ * The same stand-in, in the shape codex-acp writes it: ONE text input holding
+ * the bare uri and then the block on the next line. Codex joins a prompt's text
+ * inputs with nothing between them, so the uri ends whatever came before it —
+ * `what is thishttps://a.test/`, with `<context ref="https://a.test/">` on the
+ * line below. Taken off the end of that text, it is the badge again.
+ */
+function detachGluedStandIns(
+  text: string,
+  nameHandoff: AdapterMessageText["pageHandoffName"]
+): { text: string; badges: string[] } {
+  const badges: string[] = []
+  let out = ""
+  let cursor = 0
+  EMBEDDED_CONTEXT_RE.lastIndex = 0
+  for (const match of text.matchAll(EMBEDDED_CONTEXT_RE)) {
+    const start = match.index ?? 0
+    const ref = (match[1] ?? "").trim()
+    let before = text.slice(cursor, start)
+    if (ref && before.endsWith(ref) && !insideFence(text, start)) {
+      before = before.slice(0, before.length - ref.length)
+      const name = embeddedContextName(ref, match[2] ?? "", nameHandoff)
+      badges.push(embeddedBadge(name, ref))
+    }
+    out += before + match[0]
+    cursor = start + match[0].length
+  }
+  return { text: out + text.slice(cursor), badges }
 }
 
 export function extractUserResourcesFromText(text: string): {
@@ -1298,14 +1384,14 @@ export function extractUserResourcesFromText(text: string): {
 
 function splitUserTextAndResources(
   parts: AdaptedContentPart[],
-  attachedResourcesText: string
+  text: AdapterMessageText
 ): {
   parts: AdaptedContentPart[]
   resources: UserResourceDisplay[]
 } {
   const resources: UserResourceDisplay[] = []
   const nextParts: AdaptedContentPart[] = []
-  const attachments = embeddedAttachmentNames(parts)
+  const attachments = embeddedAttachmentNames(parts, text.pageHandoffName)
   const badges: string[] = []
 
   for (const part of parts) {
@@ -1317,9 +1403,18 @@ function splitUserTextAndResources(
     // stand-in the ACP adapter wrote for the badge. Held back rather than kept
     // in place: a bare address sitting in the prose reads as something the
     // person typed, and it is the one piece of the message they never wrote.
+    // Each stand-in takes the next name its ref has; once they are all taken,
+    // a part that reads the same is an address the person did type.
     const ref = part.text.trim()
-    const name = attachments.get(ref)
-    const source = name ? embeddedBadge(name, ref) : part.text
+    const name = attachments.get(ref)?.shift()
+    let source: string
+    if (name) {
+      source = embeddedBadge(name, ref)
+    } else {
+      const glued = detachGluedStandIns(part.text, text.pageHandoffName)
+      badges.push(...glued.badges)
+      source = glued.text
+    }
     const extracted = extractUserResourcesFromText(source)
     if (extracted.resources.length > 0) {
       // Through `addResource`, not a splice: one attachment reaches the row
@@ -1358,7 +1453,7 @@ function splitUserTextAndResources(
   }
 
   if (nextParts.length === 0 && resources.length > 0) {
-    nextParts.push({ type: "text", text: attachedResourcesText })
+    nextParts.push({ type: "text", text: text.attachedResources })
   }
 
   return { parts: nextParts, resources }
@@ -2539,7 +2634,7 @@ export function adaptMessageTurn(
 
   const userSplit =
     turn.role === "user"
-      ? splitUserTextAndResources(groupedContent, text.attachedResources)
+      ? splitUserTextAndResources(groupedContent, text)
       : { parts: groupedContent, resources: [] as UserResourceDisplay[] }
   // Only user-uploaded images surface as top-of-message attachments.
   // Assistant-side image_generation flows through the inline

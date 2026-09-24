@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 pub struct SystemProxySettings {
     pub enabled: bool,
     pub proxy_url: Option<String>,
+    /// Hosts that connect directly instead of through the proxy, as a
+    /// comma-separated list. Exported as `NO_PROXY` behind the loopback hosts
+    /// codeg always adds (see [`crate::network::proxy::no_proxy_env_value`]).
+    /// `#[serde(default)]` so rows stored before this field existed still parse.
+    #[serde(default)]
+    pub no_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

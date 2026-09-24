@@ -10,6 +10,7 @@ use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageTurn, TurnRole, TurnUsage,
 };
+use crate::acp::connection::grok_failed_compaction_meta;
 use crate::acp::types::PromptInputBlock;
 use crate::parsers::claude::BACKGROUND_TASK_MARKER;
 use crate::parsers::{
@@ -910,6 +911,33 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     tool_use_id: Some(id),
                     output_preview: None,
                     is_error: false,
+                    agent_stats: None,
+                    images: Vec::new(),
+                });
+            }
+            // A failed auto-compaction: the same card in its failed state, as the
+            // live mapper renders it (the two share `grok_failed_compaction_meta`,
+            // whose `error` is the card's reason). `is_error` on the paired
+            // result is what marks the card failed.
+            "auto_compact_failed" => {
+                out.content_events += 1;
+                let id = params_meta
+                    .and_then(|m| m.get("eventId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("grok-compaction-{}", out.content_events));
+                let turn = ensure_assistant(&mut assistant, now);
+                turn.blocks.push(ContentBlock::ToolUse {
+                    tool_use_id: Some(id.clone()),
+                    tool_name: "context_compaction".to_string(),
+                    input_preview: None,
+                    status: None,
+                    meta: Some(grok_failed_compaction_meta(update)),
+                });
+                turn.blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: None,
+                    is_error: true,
                     agent_stats: None,
                     images: Vec::new(),
                 });
@@ -2117,6 +2145,47 @@ mod tests {
     }
 
     #[test]
+    fn history_renders_failed_auto_compaction_as_failed_compaction_tool() {
+        // The live mapper renders `auto_compact_failed` as the compaction card in
+        // its failed state; a reopened conversation has to show the same card,
+        // not drop the failure.
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"plan a page"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}},"timestamp":1783584020}"#, "\n",
+            r#"{"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"auto_compact_failed","reason":"API error (status 503)"},"_meta":{"eventId":"ev-compact-failed"}},"timestamp":1783584021}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584022}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let detail = GrokParser::with_base_dir(sessions)
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let blocks: Vec<_> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let meta = blocks
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(m),
+                    ..
+                } if id == "ev-compact-failed" => Some(m.clone()),
+                _ => None,
+            })
+            .expect("failed compaction tool_use present in history");
+        assert_eq!(
+            meta,
+            serde_json::json!({
+                "contextCompaction": { "version": 1, "error": "API error (status 503)" }
+            })
+        );
+        // The paired result is what marks the card failed.
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ContentBlock::ToolResult { tool_use_id: Some(id), is_error: true, .. }
+                if id == "ev-compact-failed"
+        )));
+    }
+
+    #[test]
     fn merges_prompt_text_and_native_image_into_one_user_turn() {
         // Grok echoes a native ACP image as its own `user_message_chunk` (same
         // `promptIndex` as the prose) — the shape captured from a live 1.0.0 and
@@ -2208,8 +2277,9 @@ mod tests {
         assert!(
             matches!(&turns[0].blocks[1], ContentBlock::Text { text } if text == "[report.pdf](file:///tmp/report.pdf)")
         );
+        // A text resource: the attachment it is shown as, without its body.
         assert!(
-            matches!(&turns[0].blocks[2], ContentBlock::Text { text } if text == "[clipboard://notes.txt-1](clipboard://notes.txt-1)")
+            matches!(&turns[0].blocks[2], ContentBlock::Text { text } if text == "clipboard://notes.txt-1\n<context ref=\"clipboard://notes.txt-1\">\n\n</context>")
         );
     }
 

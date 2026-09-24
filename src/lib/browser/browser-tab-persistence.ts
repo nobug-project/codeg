@@ -28,6 +28,9 @@ export interface PersistedBrowserTab {
    *  existed has none and comes back in the default one; the restorer maps a
    *  profile that has since been deleted to the default one as well. */
   profile: string
+  /** An address on the remote codeg host (`BrowserTabSeed.remote`). Written
+   *  only when set, so records of every other tab keep their old shape. */
+  remote?: true
 }
 
 const KEY_PREFIX = "browser:tabs:"
@@ -57,7 +60,10 @@ function isWebUrl(url: string): boolean {
  *  thrown on — a corrupt entry must not take the whole list with it. */
 function sanitize(raw: unknown): PersistedBrowserTab | null {
   if (!raw || typeof raw !== "object") return null
-  const { url, title, folderId, profile } = raw as Record<string, unknown>
+  const { url, title, folderId, profile, remote } = raw as Record<
+    string,
+    unknown
+  >
   if (typeof url !== "string" || !isWebUrl(url)) return null
   return {
     url,
@@ -67,6 +73,7 @@ function sanitize(raw: unknown): PersistedBrowserTab | null {
         ? folderId
         : null,
     profile: isBrowserProfileId(profile) ? profile : DEFAULT_BROWSER_PROFILE_ID,
+    ...(remote === true ? { remote: true as const } : {}),
   }
 }
 
@@ -117,6 +124,7 @@ export function writePersistedBrowserTabs(
         title: tab.title,
         folderId: tab.folderId,
         profile: tab.profile,
+        ...(tab.remote ? { remote: true as const } : {}),
       })),
     }
     localStorage.setItem(key, JSON.stringify(stored))
@@ -153,6 +161,7 @@ export function snapshotBrowserTabs(
       title: state?.title || tab.title,
       folderId: tab.folderId,
       profile: tab.browser.profile,
+      ...(tab.browser.remote ? { remote: true as const } : {}),
     })
   }
   return out
@@ -168,7 +177,8 @@ export function samePersistedBrowserTabs(
       a[i].url !== b[i].url ||
       a[i].title !== b[i].title ||
       a[i].folderId !== b[i].folderId ||
-      a[i].profile !== b[i].profile
+      a[i].profile !== b[i].profile ||
+      a[i].remote !== b[i].remote
     ) {
       return false
     }

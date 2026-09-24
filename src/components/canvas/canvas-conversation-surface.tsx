@@ -9,7 +9,6 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
-import { toast } from "sonner"
 import { AgentSelector } from "@/components/chat/agent-selector"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
@@ -24,10 +23,12 @@ import {
   createChatDir,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { notify } from "@/lib/notify"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
+  promptDraftTitleSeed,
 } from "@/lib/prompt-draft"
 import {
   getSavedModeId,
@@ -264,7 +265,6 @@ export function CanvasConversationSurface({
     getSavedModeId(agentType)
   )
   const [sendSignal, setSendSignal] = useState(0)
-  const [createError, setCreateError] = useState<string | null>(null)
   const creatingRef = useRef(false)
   // Mirrors `creatingRef` as state, purely so the card can refuse to be thrown
   // away mid-creation: the row is already being written and the prompt is
@@ -360,7 +360,6 @@ export function CanvasConversationSurface({
     modeLoading,
     configOptionsLoading,
     selectorsLoading,
-    autoConnectError,
     handleFocus,
     handleSend: lifecycleSend,
     handleSetConfigOption,
@@ -578,15 +577,12 @@ export function CanvasConversationSurface({
       if (!draftTarget) return
       creatingRef.current = true
       setCreating(true)
-      setCreateError(null)
       void (async () => {
         try {
-          const title = getPromptDraftDisplayText(
+          const title = promptDraftTitleSeed(
             draft,
             sharedT("attachedResources")
           )
-            .trim()
-            .slice(0, 80)
           let newId: number
           let sendFolderId: number
           if (draftTarget.kind === "chat") {
@@ -624,11 +620,16 @@ export function CanvasConversationSurface({
         } catch (e) {
           console.error("[canvas] create conversation:", e)
           // Restore the pre-send state whole: no ghost turn stuck in
-          // awaiting_persist, and the error visible rather than silent.
+          // awaiting_persist, and the error visible rather than silent — as
+          // a notification, like every verdict on a click.
           removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
           setSyncState(effectiveConversationId, "idle")
-          setCreateError(toErrorMessage(e))
-          toast.error(t("createFailed"))
+          notify({
+            level: "error",
+            key: `canvas-create-failed:${contextKey}`,
+            title: t("createFailed"),
+            description: toErrorMessage(e),
+          })
         } finally {
           creatingRef.current = false
           setCreating(false)
@@ -640,6 +641,7 @@ export function CanvasConversationSurface({
       appendOptimisticTurn,
       boundFolderId,
       connSessionId,
+      contextKey,
       draftTarget,
       effectiveConversationId,
       lifecycleSend,
@@ -678,6 +680,13 @@ export function CanvasConversationSurface({
     [acpActions, contextKey]
   )
 
+  // Client-local, like the conversation panel's — and what lets the muted
+  // "recovered" line expire on its own.
+  const handleSessionFailureDismiss = useCallback(
+    (ids: string[]) => acpActions.dismissSessionFailures(contextKey, ids),
+    [acpActions, contextKey]
+  )
+
   /** Stop one AIR async task. `false` (the adapter declined) is surfaced —
    *  a successful stop announces itself by the row leaving the strip, so
    *  silence would be indistinguishable from a click that did nothing. */
@@ -687,10 +696,20 @@ export function CanvasConversationSurface({
       if (!connectionId) return false
       try {
         const stopped = await acpStopAsyncTask(connectionId, taskId)
-        if (!stopped) toast.warning(tAsyncTasks("stopDeclined"))
+        if (!stopped) {
+          notify({
+            level: "warning",
+            key: `async-task-stop:${connectionId}:${taskId}`,
+            title: tAsyncTasks("stopDeclined"),
+          })
+        }
         return stopped
       } catch (err) {
-        toast.error(tAsyncTasks("stopFailed", { error: toErrorMessage(err) }))
+        notify({
+          level: "error",
+          key: `async-task-stop:${connectionId}:${taskId}`,
+          title: tAsyncTasks("stopFailed", { error: toErrorMessage(err) }),
+        })
         return false
       }
     },
@@ -738,9 +757,9 @@ export function CanvasConversationSurface({
           promptCapabilities={conn.promptCapabilities}
           defaultPath={workingDir}
           agentName={getAgentLabel(agentType)}
-          error={conn.error ?? autoConnectError ?? createError}
           claudeApiRetry={conn.claudeApiRetry}
           sessionFailures={conn.sessionFailures}
+          onSessionFailureDismiss={handleSessionFailureDismiss}
           asyncTasks={conn.asyncTasks}
           onStopAsyncTask={handleStopAsyncTask}
           pendingPermission={conn.pendingPermission}

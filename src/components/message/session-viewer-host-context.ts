@@ -75,6 +75,8 @@ export interface FileRequest extends FileViewerRequest {
 export interface BrowserRequest {
   kind: "browser"
   url: string
+  /** An address on the remote codeg host (`BrowserTabSeed.remote`). */
+  remote?: boolean
 }
 
 export type SessionViewerRequest =

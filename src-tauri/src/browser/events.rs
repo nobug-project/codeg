@@ -13,10 +13,10 @@ use super::confirm::{EvalRequestPayload, EVAL_REQUEST_EVENT};
 use super::doc_guest::DocGuestState;
 use super::downloads::{BrowserDownload, DOWNLOAD_EVENT};
 use super::types::{
-    BrowserClosedPayload, BrowserConsoleErrorsPayload, BrowserNavigationBlockedPayload,
+    BrowserClosedPayload, BrowserConsoleErrorsPayload, BrowserEgressPayload, BrowserNavigationBlockedPayload,
     BrowserOpenRequestPayload, BrowserPopupPayload, BrowserShortcutPayload, BrowserTabState,
     BrowserDevtoolsClosedPayload, NavigationBlockReason, CLOSED_EVENT, CONSOLE_ERRORS_EVENT,
-    DEVTOOLS_CLOSED_EVENT, DOC_STATE_EVENT,
+    DEVTOOLS_CLOSED_EVENT, DOC_STATE_EVENT, EGRESS_EVENT,
     NAVIGATION_BLOCKED_EVENT, OPEN_REQUEST_EVENT, POPUP_EVENT, SHORTCUT_EVENT, STATE_EVENT,
 };
 
@@ -148,6 +148,17 @@ pub fn emit_console_errors(app: &AppHandle, tab_id: &str, errors: bool) {
         BrowserConsoleErrorsPayload {
             tab_id: tab_id.to_string(),
             errors,
+        },
+    );
+}
+
+pub fn emit_egress(app: &AppHandle, connection_id: i32, status: &crate::browser::egress::EgressStatus) {
+    emit_event(
+        &EventEmitter::Tauri(app.clone()),
+        EGRESS_EVENT,
+        BrowserEgressPayload {
+            connection_id,
+            status: status.clone(),
         },
     );
 }

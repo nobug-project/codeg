@@ -241,6 +241,8 @@
     "enableProxy": "システムプロキシを有効化",
     "proxyAddress": "プロキシアドレス",
     "proxyHint": "http(s)/socks5 をサポート。例: {example}。システムプロキシ有効時のみ有効です。",
+    "proxyBypass": "プロキシを使用しないアドレス",
+    "proxyBypassHint": "複数のアドレスは半角カンマ <code>,</code> で区切り、スペースは入れません。例: <code>{example}</code>。<code>example.com</code> はそのドメインに、<code>.example.com</code> はそのすべてのサブドメインに一致します。IP アドレスも指定できます。ローカルアドレス <code>localhost,127.0.0.1,::1</code> は常に直接接続されるため、入力は不要です。このリストは環境変数 NO_PROXY として適用されます。",
     "save": "保存",
     "saving": "保存中...",
     "proxyRequired": "プロキシ有効時はプロキシ URL が必要です",
@@ -300,6 +302,8 @@
     "rollbackSuccess": "以前のバージョンにロールバックしました。再読み込みしています...",
     "rollbackFailed": "ロールバックに失敗しました。サーバーのログを確認してください。",
     "updateErrors": {
+      "permissionDenied": "{path} に書き込めないため、その場で更新をインストールできません。管理者権限で手動更新するか、インストール先の権限を確認してください。",
+      "targetWriteFailed": "{path} に書き込めないため、その場で更新をインストールできません: {reason}",
       "sourceUnavailable": "更新ソースに接続できません。ネットワークまたはプロキシを確認して再試行してください。",
       "network": "ネットワーク接続に失敗しました。ネットワークまたはプロキシを確認して再試行してください。",
       "downloadFailed": "更新パッケージのダウンロードに失敗しました。しばらくしてから再試行してください。",
@@ -3006,8 +3010,6 @@
           "openAgentsSettings": "エージェント設定を開く",
           "retry": "再試行"
         },
-        "agentsSetupHint": "インストール管理は「設定 > エージェント」を開いてください。",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "現在のエージェント設定を読み取れません。",
           "disabled": "{agent} はエージェント設定で無効になっています。接続前に有効化してください。",
@@ -3032,15 +3034,18 @@
           "turnFailedAuthRequired": "{agent} はこのターンを実行する前に再度のサインインを必要としています。設定からサインインしてから、メッセージを送り直してください。",
           "agentAuthRequired": "{agent} はセッションを開始できませんでした。使用可能な認証情報がありません。設定 → エージェント → {agent} で再度サインインしてから、この会話を開き直してください。",
           "grokModelSwitchIncompatibleAgent": "{agent} は既存の会話ではこのモデルに切り替えられません。新しいセッションを開始して使用してください。",
+          "setModeFailed": "{agent} はモードを切り替えられませんでした。",
+          "setConfigOptionFailed": "{agent} はその設定を適用できませんでした。",
+          "goalControlFailed": "{agent} は目標を更新できませんでした。",
+          "imageDropped": "添付画像の 1 枚が {agent} に届きませんでした。",
+          "sessionLoadFallback": "{agent} は以前のセッションを復元できなかったため、新しいセッションを開始しました。以前のコンテキストは引き継がれていません。",
           "turnFailedEmpty": "{agent} は応答を生成せずにターンを終了しました。",
           "turnFailedEmptyProtocol": "{agent} の出力を codeg が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
-          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。",
-          "detailsInAlerts": "ステータスバーのアラートを開き、詳細を展開するとエージェントの出力を確認できます。"
+          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。"
         },
         "unableReadAgentConfig": "エージェント設定を読み取れません: {message}",
         "connectFailedTitle": "{agent} の接続に失敗しました",
         "toolFallbackTitle": "ツール",
-        "eventErrorTitle": "エージェントエラー",
         "notificationTurnComplete": "{agent} の応答が完了しました",
         "notificationError": "{agent} エラー：{message}",
         "notificationQuestion": "{agent} が回答を待っています",
@@ -3057,7 +3062,8 @@
           "lineNoErrorWithDelay": "{retry}、{delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました"
+        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました",
+        "noticeTitle": "{agent}：{title}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3783,7 +3789,6 @@
         "reconnecting": "再接続中…",
         "reconnectDisabledDuringTurn": "現在のターンが完了すると再接続できます",
         "dismiss": "閉じる",
-        "reconnectFailed": "セッションの再接続に失敗しました",
         "applied": "新しい設定を適用しました"
       },
       "piProjectTrust": {
@@ -4221,7 +4226,7 @@
     "agentTypeRequired": "エージェントタイプを選択してください。",
     "agentTypeImmutableHint": "エージェントタイプは作成後に変更できません。",
     "model": "モデル",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "メインモデル",
     "claudeReasoningModel": "推論モデル（思考）",
@@ -6265,6 +6270,7 @@
       "ownedWindow": "このページは別ウィンドウに表示されています。",
       "ownedWindowShow": "ウィンドウを表示",
       "remoteBanner": "{host} 経由で開いています",
+      "remoteBannerDown": "{host} との接続が切れました。次のリクエストで再接続します。",
       "navigationBlocked": "移動をブロックしました: {host}",
       "navigationBlockedRule": "サイトルールによりブロック",
       "navigationBlockedScheme": "この種類のアドレスはここでは開けません",
@@ -6278,7 +6284,17 @@
       "agentGrantLost": "共有を終了しました：ページが {origin} を離れました",
       "agentGrantLostShare": "{origin} も共有",
       "agentGrantReplaced": "共有を終了しました：現在 {origin} には別のプログラムが応答しています",
-      "agentGrantReplacedShare": "それでも共有"
+      "agentGrantReplacedShare": "それでも共有",
+      "errorRemoteRefused": "リモートホストのこのアドレスで待ち受けているものはありません",
+      "errorRemoteRefusedHint": "{host} が接続を拒否しました。このアドレスのサーバーがそのマシンで動いているか確認してください。",
+      "errorRemoteUnreachable": "リモートホストからこのアドレスに到達できません",
+      "errorRemoteUnreachableHint": "{host} から見て、この名前は解決できないか、そこへの経路がありません。",
+      "errorRemoteNotAllowed": "リモートサーバーはこのアドレスをブラウザーに開放していません",
+      "errorRemoteNotAllowedHint": "{host} の codeg-server は、ブラウザートンネルからプライベートアドレスへの接続だけを許可しています（CODEG_BROWSER_TUNNEL=private）。",
+      "errorRemoteTimeout": "リモートホストの接続がタイムアウトしました",
+      "errorRemoteTimeoutHint": "{host} はこのアドレスから時間内に応答を得られませんでした。そちらのサーバーが混んでいるか、ファイアウォールの内側にある可能性があります。",
+      "errorTunnelDown": "リモートホストとの接続が切れています",
+      "errorTunnelDownHint": "{host} へのトンネルは現在何も運べません。再び到達できるようになったら再試行してください。"
     },
     "tab": {
       "untitled": "新しいタブ"
@@ -6300,6 +6316,20 @@
       "unreachableHint": "codeg サーバーはこのページを {origin} で公開していますが、お使いのブラウザから到達できません。そのポートを公開する（CODEG_BRIDGE_PORTS を参照）か CODEG_BRIDGE_PUBLIC_HOST を設定してください。codeg を HTTPS で提供している場合は、ブリッジポートにも HTTPS が必要です。",
       "unreachableHostHint": "codeg のサーバーはこのページを {origin} に置きましたが、ブラウザから到達できません。そのホスト名が codeg サーバーに解決され、前段のプロキシを通り抜ける必要があります。ワイルドカードの DNS レコードとワイルドカードの vhost を用意してください（CODEG_BRIDGE_HOST_PATTERN を参照）。",
       "errorTitle": "このページはここに表示できません"
+    },
+    "remote": {
+      "title": "このアドレスは {host} 上にあります",
+      "titleUnnamed": "このアドレスはリモートホスト上にあります",
+      "description": "このアドレスはこのワークスペースが動いているマシンを指しており、このコンピューターではありません。",
+      "copyAddress": "アドレスをコピー",
+      "copied": "アドレスをコピーしました",
+      "tryHost": "{host} を試す",
+      "tryHostHint": "{address} をこのコンピューターのタブで開きます。向こうのページがすべてのネットワークインターフェースで待ち受けていて、このコンピューターからそのポートに届く場合に使えます。",
+      "openHere": "このコンピューターで開く",
+      "openHereHint": "このアドレスをこのコンピューターのタブで開きます。このコンピューターが同じネットワークにある場合に使えます。",
+      "retry": "再試行",
+      "connecting": "{host} 経由で接続しています…",
+      "connectingUnnamed": "リモートホスト経由で接続しています…"
     },
     "download": {
       "started": "ダウンロード中…",
@@ -6356,6 +6386,7 @@
       "shareControl": "閲覧と操作",
       "levelDefault": "既定",
       "notShareable": "このページには共有できるウェブアドレスがありません",
+      "remoteWindow": "リモートワークスペースのエージェントはそのホスト上で動いており、このコンピューターのブラウザーは使えません",
       "shared": "共有中",
       "sharedControl": "共有中 · 操作可",
       "sharedWith": "エージェントは {origin} を読み取れます",
@@ -6449,6 +6480,7 @@
       "noConversation": "送り先の会話を開いてください",
       "pickElement": "要素を選ぶ…",
       "screenshot": "スクリーンショットを送る",
+      "markUp": "スクリーンショットに書き込む…",
       "consoleErrors": "コンソールのエラーを送る",
       "consoleClean": "このページでエラーは起きていません",
       "picking": "選択中…",
@@ -6459,9 +6491,20 @@
       "noConsoleErrors": "このページはエラーを出力していません",
       "chipElement": "ページ要素",
       "chipScreenshot": "ページのスクリーンショット",
+      "chipMarkedScreenshot": "書き込み入りのスクリーンショット",
       "chipConsole": "{count, plural, other {コンソールエラー # 件}}",
       "gone": "その会話はもう開いていません",
-      "consoleErrorsCount": "{count, plural, other {コンソールのエラー # 件を送る}}"
+      "consoleErrorsCount": "{count, plural, other {コンソールのエラー # 件を送る}}",
+      "markupTitle": "スクリーンショットに書き込む",
+      "markupTools": "描画ツール",
+      "markupBox": "枠",
+      "markupArrow": "矢印",
+      "markupUndo": "元に戻す",
+      "markupClear": "消去",
+      "markupHint": "画像の上をドラッグして描きます。マークには番号が付くので、メッセージではその番号で指し示せます。",
+      "markupCount": "{count, plural, other {マーク # 個}}",
+      "markupCancel": "キャンセル",
+      "markupSend": "チャットに追加"
     }
   },
   "browser": {
@@ -6473,6 +6516,16 @@
     "inspector": {
       "error": {
         "switchedOff": "このタブは Web インスペクタがオフの状態で開かれました。ブラウザ設定でオンにしてから、ページを開き直してください。"
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "リモートホストのアドレスを内蔵ブラウザで開くには macOS 14 以降が必要です。",
+        "unsupported": "リモートの codeg-server が古く、ブラウザーの通信を中継できません。ここでアドレスを開くには更新してください。",
+        "disabled": "リモートの codeg-server でブラウザートンネルがオフになっています（CODEG_BROWSER_TUNNEL）。",
+        "unreachable": "リモートの codeg-server のブラウザートンネルに接続できませんでした（{reason}）。",
+        "bypassed": "このコンピューターのブラウザーエンジンは一部のアドレスをトンネルを通さずに送るため、このコンピューターから読み込まないよう、リモートホストのページは開きません。",
+        "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
   }

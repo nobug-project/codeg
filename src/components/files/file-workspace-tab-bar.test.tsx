@@ -271,6 +271,19 @@ describe("FileWorkspaceTabBar — the add-tab '+'", () => {
     expect(mocks.browserListServices).not.toHaveBeenCalled()
   })
 
+  // Those servers were started by THIS computer's terminals; a window bound
+  // to a remote codeg-server runs its terminals on that host.
+  it("does not offer this computer's servers in a remote workspace window", async () => {
+    remoteDesktop = true
+    mocks.browserListServices.mockResolvedValue([
+      detectedService("http://localhost:5173/"),
+    ])
+    renderStrip()
+    await openAddMenu()
+    expect(mocks.browserListServices).not.toHaveBeenCalled()
+    expect(screen.queryByText("Local servers")).toBeNull()
+  })
+
   it("hides itself entirely rather than opening an empty menu", () => {
     desktop = false
     browserAvailable = false

@@ -42,6 +42,9 @@ export type ClosedBrowserTab = {
   folderId: number | null
   /** The browser profile the tab lived in; it reopens in the same one. */
   profile: string
+  /** An address on the remote codeg host (`BrowserTabSeed.remote`): it
+   *  reopens as one, never as a page of this computer. */
+  remote?: true
 }
 
 export type ClosedWorkspaceTab =
@@ -186,7 +189,11 @@ export function snapshotFileTab(
  * address the tab was opened with.
  */
 export function snapshotBrowserTab(
-  tab: { id: string; folderId: number | null; browser: { profile: string } },
+  tab: {
+    id: string
+    folderId: number | null
+    browser: { profile: string; remote?: true }
+  },
   url: string,
   title: string,
   index: number
@@ -199,5 +206,6 @@ export function snapshotBrowserTab(
     title,
     folderId: tab.folderId,
     profile: tab.browser.profile,
+    ...(tab.browser.remote ? { remote: true as const } : {}),
   }
 }

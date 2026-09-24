@@ -107,4 +107,32 @@ describe("isOutOfTurnContentEvent", () => {
     expect(isOutOfTurnContentEvent({ type: "thinking", text: "" })).toBe(false)
     expect(isOutOfTurnContentEvent({ type: "content_delta" })).toBe(false)
   })
+
+  it("ignores trailing newlines and whitespace without suppressing subsequent background text", () => {
+    // Captured after Stop: turn_complete(cancelled), connected, then "\n".
+    // No cancellation timer/state is needed: meaningful output must remain
+    // recoverable even when an autonomous task resumes after an interruption.
+    for (const text of ["\n", "\r\n", " ", "\t", "\u00a0", "\u3000"]) {
+      expect(isOutOfTurnContentEvent({ type: "content_delta", text })).toBe(
+        false
+      )
+      expect(isOutOfTurnContentEvent({ type: "thinking", text })).toBe(false)
+    }
+    expect(
+      isOutOfTurnContentEvent({
+        type: "content_delta",
+        text: "Background result",
+      })
+    ).toBe(true)
+    expect(isOutOfTurnContentEvent({ type: "tool_call" })).toBe(true)
+  })
+
+  it("keeps indented code and text-bearing whitespace chunks recoverable", () => {
+    expect(
+      isOutOfTurnContentEvent({ type: "content_delta", text: "  return 1\n" })
+    ).toBe(true)
+    expect(
+      isOutOfTurnContentEvent({ type: "thinking", text: "\nnext step\n" })
+    ).toBe(true)
+  })
 })

@@ -36,6 +36,77 @@ pub fn create(
     build(app, owner, tab_id, label, title, background, devtools, profile, None)
 }
 
+/// A window's container and proxy: `profile`'s.
+fn in_profile<'a>(
+    builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+    profile: &str,
+) -> tauri::Result<WebviewWindowBuilder<'a, tauri::Wry, AppHandle>> {
+    // macOS: never a window of a remote profile. The loopback rules and the
+    // alias its pages need are the embedded surface's; a window of wry's own
+    // making would send the remote host's `localhost` to this computer.
+    #[cfg(target_os = "macos")]
+    if profile::is_remote_profile(profile) {
+        return Err(tauri::Error::Io(std::io::Error::other(format!(
+            "browser profile {profile} opens embedded tabs only"
+        ))));
+    }
+    #[cfg(target_os = "macos")]
+    // wry falls back to the default store below macOS 14, exactly like the
+    // shim does for embedded tabs; the proxy is a property of the store and
+    // is in place once `profile::prepare` has run.
+    let builder = builder.data_store_identifier(profile::data_store_identifier(profile));
+    #[cfg(target_os = "windows")]
+    let builder = builder
+        .data_directory(profile::directory(profile))
+        .additional_browser_args(
+            &profile::windows_args_for(profile).map_err(|e| tauri::Error::Io(std::io::Error::other(e)))?,
+        );
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let builder = {
+        let builder = builder.data_directory(profile::directory(profile));
+        // A remote profile's egress, else the app's proxy (see
+        // `profile::proxy_for`). The app's proxy is best effort; a remote
+        // profile's is not: without it the window would load the remote
+        // host's addresses from this computer.
+        let remote = profile::is_remote_profile(profile);
+        let refuse = |reason: String| tauri::Error::Io(std::io::Error::other(reason));
+        match profile::proxy_for(profile) {
+            Ok(Some(proxy)) => match Url::parse(&proxy.to_url_string()) {
+                Ok(url) => builder.proxy_url(url),
+                Err(err) if remote => return Err(refuse(err.to_string())),
+                Err(_) => builder,
+            },
+            Ok(None) => builder,
+            Err(reason) if remote => return Err(refuse(reason)),
+            Err(reason) => {
+                tracing::warn!("[browser] ignoring the configured proxy: {reason}");
+                builder
+            }
+        }
+    };
+    Ok(builder)
+}
+
+/// A window of `profile` that is never shown, on `url`: the remote-egress
+/// probe's page (see `browser/egress.rs`) where the profile's tabs are owned
+/// windows (Linux, and Windows without the embedded surface), built with the
+/// profile's folder, arguments and proxy exactly as they are. None of a tab's
+/// hooks: the page is the listener's own and goes nowhere else.
+#[cfg_attr(
+    any(target_os = "macos", all(target_os = "windows", feature = "browser-child")),
+    allow(dead_code)
+)]
+pub fn open_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> tauri::Result<WebviewWindow> {
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title("codeg")
+        .visible(false)
+        .focused(false)
+        .skip_taskbar(true)
+        .devtools(false)
+        .disable_drag_drop_handler();
+    in_profile(builder, profile)?.build()
+}
+
 /// The window a page asked for, built from the one that asked: same profile,
 /// same hooks, and — where the engine insists on it — related to the opener,
 /// which is what keeps `window.opener`, `Referer` and `noopener` the page's
@@ -137,32 +208,7 @@ fn build(
     };
     // Same container and proxy as the embedded tabs, so a page behaves the
     // same whichever surface hosts it.
-    #[cfg(target_os = "macos")]
-    // wry falls back to the default store below macOS 14, exactly like the
-    // shim does for embedded tabs; the proxy is a property of the store and
-    // is in place once `profile::prepare` has run.
-    let builder = builder.data_store_identifier(profile::data_store_identifier(profile));
-    #[cfg(target_os = "windows")]
-    let builder = builder
-        .data_directory(profile::directory(profile))
-        .additional_browser_args(&profile::windows_browser_args(
-            profile::frozen_proxy().as_ref(),
-        ));
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let builder = {
-        let builder = builder.data_directory(profile::directory(profile));
-        match profile::current_proxy() {
-            Ok(Some(proxy)) => match Url::parse(&proxy.to_url_string()) {
-                Ok(url) => builder.proxy_url(url),
-                Err(_) => builder,
-            },
-            Ok(None) => builder,
-            Err(reason) => {
-                tracing::warn!("[browser] ignoring the configured proxy: {reason}");
-                builder
-            }
-        }
-    };
+    let builder = in_profile(builder, profile)?;
     let builder = platform::relate(builder, opener);
     // Every browser window answers `window.open` the same way: the popup
     // blocker's decision, and then a window of its own registered as a tab
@@ -478,7 +524,7 @@ mod platform {
             origin: None,
             zoom: 1.0,
             error: None,
-            remote_host: None,
+            remote_host: profile::remote_host(profile),
             opener_tab_id: Some(opener_tab_id.to_string()),
             profile: Some(profile.to_string()),
             agent_grant: None,

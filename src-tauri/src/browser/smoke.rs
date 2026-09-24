@@ -227,6 +227,23 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                 Some("window") => SurfaceChoice::Window,
                 _ => SurfaceChoice::Auto,
             };
+            // `egress`: a remote connection's id, as `browser_open_tab` takes
+            // it — the tab goes into that connection's profile once its
+            // egress is ready.
+            let profile = match cmd.get("egress").and_then(Value::as_i64) {
+                Some(connection_id) => {
+                    let connection_id = i32::try_from(connection_id).map_err(err_string)?;
+                    crate::browser::remote::prepare(app, &owner, connection_id)
+                        .await
+                        .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
+                    crate::browser::profile::remote_profile_id(connection_id)
+                }
+                None => cmd
+                    .get("profile")
+                    .and_then(Value::as_str)
+                    .unwrap_or(crate::browser::profile::DEFAULT_PROFILE_ID)
+                    .to_string(),
+            };
             let state = browser_commands::open_tab_core(
                 app,
                 &owner,
@@ -241,15 +258,34 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                         .unwrap_or(false),
                     surface,
                     devtools: cmd.get("devtools").and_then(Value::as_bool).unwrap_or(false),
-                    profile: cmd
-                        .get("profile")
-                        .and_then(Value::as_str)
-                        .unwrap_or(crate::browser::profile::DEFAULT_PROFILE_ID)
-                        .to_string(),
+                    profile,
                 },
             )
             .map_err(err_string)?;
             Ok(json!(state))
+        }
+        // A remote connection row, for driving `browser_open` with `egress`.
+        "remote_connection_create" => {
+            let db = app.state::<crate::db::AppDatabase>();
+            let connection = crate::db::service::remote_workspace_connection_service::create(
+                &db.conn,
+                &str_arg(cmd, "name")?,
+                &str_arg(cmd, "base_url")?,
+                &str_arg(cmd, "token")?,
+                &[],
+            )
+            .await
+            .map_err(err_string)?;
+            Ok(json!(connection.id))
+        }
+        "browser_egress_status" => {
+            let connection_id = cmd.get("connection_id").and_then(Value::as_i64).ok_or("missing connection_id")?;
+            let connection_id = i32::try_from(connection_id).map_err(err_string)?;
+            let egresses = app.state::<crate::browser::egress::EgressRegistry>();
+            Ok(match egresses.get(connection_id) {
+                Some(egress) => json!({ "status": egress.status(), "socks": egress.socks_addr().to_string() }),
+                None => Value::Null,
+            })
         }
         "browser_doc_open" => {
             let owner = owner()?;

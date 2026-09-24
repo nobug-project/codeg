@@ -10,7 +10,10 @@ vi.mock("./browser-api", () => ({
   browserClose: api.browserClose,
   browserAgentGrant: api.browserAgentGrant,
 }))
-vi.mock("@/lib/transport", () => ({ isDesktop: api.isDesktop }))
+vi.mock("@/lib/transport", () => ({
+  isDesktop: api.isDesktop,
+  isRemoteDesktopMode: () => false,
+}))
 
 import {
   browserTabHiddenAt,

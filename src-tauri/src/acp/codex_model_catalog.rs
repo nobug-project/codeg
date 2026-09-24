@@ -68,7 +68,7 @@ struct EnumSpec {
 
 // Authoritative value sets + nullability, extracted from the codex binary itself
 // by feeding it candidate catalogs and reading the full `unknown variant …,
-// expected …` / `invalid type: null, expected …` errors (re-probed on 0.155.1,
+// expected …` / `invalid type: null, expected …` errors (re-probed on 0.156.1,
 // unchanged since 0.147 — treat these as version-specific and re-probe when
 // codex moves).
 fn enum_spec_for(key: &str) -> Option<EnumSpec> {
@@ -111,6 +111,16 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// binary, which also re-confirmed every other entry here. The editor offers
 /// no control for either, so only an imported or hand-edited override can
 /// carry one, which is exactly the input this list exists to catch.
+///
+/// `supports_reasoning_effort_updates` is the only boolean 0.156.1 added
+/// (codex-acp 1.13.1 moves `@openai/codex` ^0.155.1 → ^0.156.1). It ships on
+/// every entry and is as strict as the rest: `"yes"` earns `expected a
+/// boolean`, and so does `null` — probed against the 0.156.1 binary, which
+/// also re-confirmed every other entry here and every enum set above. The one
+/// other key the 0.156.1 snapshot newly carries, `default_service_tier`
+/// (`"priority"` on GPT-6 Sol and Luna), is an optional string rather than an
+/// enum — an unknown tier name parses and only a non-string is refused — so
+/// it needs no entry in either list.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -125,6 +135,7 @@ const BOOL_FIELDS: &[&str] = &[
     "include_skills_usage_instructions",
     "node_repl_auto_review_required",
     "node_repl_disabled",
+    "supports_reasoning_effort_updates",
 ];
 
 /// Whether a custom `overrides` entry is safe to write. A single value codex
@@ -640,10 +651,18 @@ mod tests {
         let models = snap();
         assert_eq!(
             models.len(),
-            9,
-            "snapshot should carry codex 0.155.1's catalog"
+            11,
+            "snapshot should carry codex 0.156.1's catalog"
         );
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-6-astra")));
+        // 0.156.1 adds GPT-6 Sol and Luna, both listed.
+        for added in ["gpt-6-sol", "gpt-6-luna"] {
+            let m = models
+                .iter()
+                .find(|m| slug_of(m) == Some(added))
+                .unwrap_or_else(|| panic!("{added} missing — regenerate the snapshot"));
+            assert!(is_listable(m), "{added} should be listed");
+        }
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-5.6-sol")));
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-5.5")));
         // codex-auto-review ships hidden.
@@ -701,14 +720,25 @@ mod tests {
             default: None,
         };
         let cat = expand_to_catalog(&config, &snap());
-        // All 9 officials auto-included + 1 custom = 10.
-        assert_eq!(slugs(&cat).len(), 10);
+        // All 11 officials auto-included + 1 custom = 12.
+        assert_eq!(slugs(&cat).len(), 12);
         // Custom is first (top of picker) and forced list + api.
         let c = find(&cat, "gw/opus").expect("custom present");
         assert_eq!(c.get("visibility").unwrap(), "list");
         assert_eq!(c.get("supported_in_api").unwrap(), &Value::Bool(true));
         assert_eq!(c.get("priority").unwrap().as_i64(), Some(0));
         assert!(c.get("base_instructions").and_then(Value::as_str).is_some());
+        // codex 0.156.1 points gpt-5.6-sol at gpt-6-sol through an `upgrade`
+        // block, which codex's TUI raises as a model-migration prompt. A custom
+        // that clones it must not inherit a migration offer for a model it is
+        // not, so the base's block is cleared — the official itself keeps it
+        // verbatim.
+        assert_eq!(c.get("upgrade"), Some(&Value::Null));
+        let official = find(&cat, "gpt-5.6-sol").expect("official present");
+        assert_eq!(
+            official.pointer("/upgrade/model").and_then(Value::as_str),
+            Some("gpt-6-sol")
+        );
         // Official preserved VERBATIM — hidden stays hidden.
         let review = find(&cat, "codex-auto-review").expect("official present");
         assert_eq!(review.get("visibility").unwrap(), "hide");
@@ -931,6 +961,10 @@ mod tests {
                     ),
                     ("node_repl_disabled".into(), Value::String("true".into())),
                     ("node_repl_auto_review_required".into(), Value::Null),
+                    (
+                        "supports_reasoning_effort_updates".into(),
+                        Value::String("yes".into()),
+                    ),
                 ]),
             }],
             ..Default::default()
@@ -943,6 +977,11 @@ mod tests {
         assert_eq!(x.get("node_repl_disabled").unwrap(), &Value::Bool(false));
         assert_eq!(
             x.get("node_repl_auto_review_required").unwrap(),
+            &Value::Bool(false)
+        );
+        // So does 0.156.1's `supports_reasoning_effort_updates`.
+        assert_eq!(
+            x.get("supports_reasoning_effort_updates").unwrap(),
             &Value::Bool(false)
         );
         // A real boolean still lands.

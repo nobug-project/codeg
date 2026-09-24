@@ -17,6 +17,36 @@ function stripBrackets(host: string): string {
   return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host
 }
 
+/** A hostname as the classifiers compare it: lower-cased, without IPv6
+ *  brackets, and without the one trailing dot a fully qualified name may
+ *  carry (`localhost.` is `localhost`). */
+function comparableHost(hostname: string): string {
+  const host = stripBrackets(hostname.trim().toLowerCase())
+  return host.endsWith(".") ? host.slice(0, -1) : host
+}
+
+/**
+ * The IPv4 address inside an IPv4-mapped IPv6 one, in either spelling: the
+ * dotted form someone typed (`::ffff:127.0.0.1`) or the hex form the URL
+ * parser serializes it to (`::ffff:7f00:1`). Null for anything else.
+ */
+function mappedIpv4(host: string): [number, number, number, number] | null {
+  if (!host.startsWith("::ffff:")) return null
+  const rest = host.slice(7)
+  const dotted = parseIpv4(rest)
+  if (dotted) return dotted
+  const groups = rest.split(":")
+  if (groups.length !== 2 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) {
+    return null
+  }
+  const [high, low] = groups.map((g) => Number.parseInt(g, 16))
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff]
+}
+
+function ipv4Of(host: string): [number, number, number, number] | null {
+  return parseIpv4(host) ?? mappedIpv4(host)
+}
+
 /** Lower-cased hostname without IPv6 brackets, or null when `url` won't parse. */
 export function hostnameOf(url: string): string | null {
   try {
@@ -35,11 +65,11 @@ export function hostnameOf(url: string): string | null {
  * unwrapped first.
  */
 export function isLoopbackHost(hostname: string): boolean {
-  const host = stripBrackets(hostname.trim().toLowerCase())
+  const host = comparableHost(hostname)
   if (!host) return false
   if (host === "localhost" || host.endsWith(".localhost")) return true
   if (host === "::1" || host === "::" || host === "0.0.0.0") return true
-  const v4 = parseIpv4(host.startsWith("::ffff:") ? host.slice(7) : host)
+  const v4 = ipv4Of(host)
   return v4 !== null && v4[0] === 127
 }
 
@@ -49,10 +79,10 @@ export function isLoopbackHost(hostname: string): boolean {
  * Loopback is NOT included; use `isLoopbackOrPrivateHost` for the union.
  */
 export function isPrivateNetworkHost(hostname: string): boolean {
-  const host = stripBrackets(hostname.trim().toLowerCase())
+  const host = comparableHost(hostname)
   if (!host) return false
   if (host.endsWith(".local")) return true
-  const v4 = parseIpv4(host.startsWith("::ffff:") ? host.slice(7) : host)
+  const v4 = ipv4Of(host)
   if (v4) {
     const [a, b] = v4
     return (
@@ -76,6 +106,25 @@ export function isPrivateNetworkHost(hostname: string): boolean {
 
 export function isLoopbackOrPrivateHost(hostname: string): boolean {
   return isLoopbackHost(hostname) || isPrivateNetworkHost(hostname)
+}
+
+/**
+ * Whether `hostname`, seen from a window bound to a remote codeg-server whose
+ * own host is `serverHost`, names a place on that remote host: a loopback or
+ * private address — except the server's own name when it is not a loopback
+ * one, which this computer reaches directly (it is how the window talks to
+ * the server at all). A server reached through a loopback address (an SSH
+ * tunnel) exempts nothing: this machine's `127.0.0.1:3000` is not the
+ * remote's.
+ */
+export function isRemoteHostName(
+  hostname: string,
+  serverHost: string | null
+): boolean {
+  if (!isLoopbackOrPrivateHost(hostname)) return false
+  if (serverHost === null) return true
+  const host = comparableHost(hostname)
+  return host !== comparableHost(serverHost) || isLoopbackHost(host)
 }
 
 export function isLoopbackOrPrivateUrl(url: string): boolean {

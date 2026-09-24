@@ -67,6 +67,60 @@ export function forgetSurfaceCreation(backendTabId: string): void {
   createdSurfaces.delete(backendTabId)
 }
 
+// How each tab's latest `browser_open_tab` stands, keyed like the tab state:
+// on its way, or refused. Kept here rather than in the host that asked,
+// because the host on screen when the answer arrives need not be that one —
+// the person can switch away and back while a remote tab's tunnel is still
+// being opened, and a refusal heard only by the host that went away would
+// leave the one now showing the tab with nothing to say. A refusal stays
+// until the tab asks again.
+export type BrowserCreateOutcome =
+  | { kind: "pending" }
+  | { kind: "failed"; error: unknown }
+
+const createOutcomes = new Map<string, BrowserCreateOutcome>()
+
+const CREATE_PENDING: BrowserCreateOutcome = { kind: "pending" }
+
+export function markBrowserCreatePending(key: string): void {
+  if (createOutcomes.get(key) === CREATE_PENDING) return
+  createOutcomes.set(key, CREATE_PENDING)
+  notify()
+}
+
+/** The create answered: with the error it was refused with, or none. */
+export function settleBrowserCreate(
+  key: string,
+  refusal?: { error: unknown }
+): void {
+  if (refusal) createOutcomes.set(key, { kind: "failed", error: refusal.error })
+  else if (!createOutcomes.delete(key)) return
+  notify()
+}
+
+/** Forget a refusal, so the tab's next host asks again. */
+export function clearBrowserCreateFailure(key: string): void {
+  if (createOutcomes.get(key)?.kind !== "failed") return
+  createOutcomes.delete(key)
+  notify()
+}
+
+export function getBrowserCreateOutcome(
+  key: string
+): BrowserCreateOutcome | null {
+  return createOutcomes.get(key) ?? null
+}
+
+export function useBrowserCreateOutcome(
+  key: string | null
+): BrowserCreateOutcome | null {
+  return useSyncExternalStore(
+    subscribeBrowserTabs,
+    () => (key ? (createOutcomes.get(key) ?? null) : null),
+    getServerSnapshot
+  )
+}
+
 // One promise chain per backend tab id, so the create and destroy calls for
 // an id happen in the order they were issued.
 //
@@ -106,15 +160,42 @@ export function runSurfaceOp<T>(
 // When each tab's surface host last went away (`null` while one is mounted).
 // A host is mounted exactly while the tab is on screen — the active tab of a
 // pane or the viewer drawer — so this is "how long has this page been in the
-// background", which the optional background unload is based on.
+// background", which the optional background unload is based on. Counted:
+// the drawer and a pane can show the same tab at once, and the one going
+// away does not take the tab off screen while the other is still there.
 const hiddenAt = new Map<string, number | null>()
+const mountedHosts = new Map<string, number>()
 
 export function markBrowserTabShown(workspaceTabId: string): void {
+  mountedHosts.set(workspaceTabId, (mountedHosts.get(workspaceTabId) ?? 0) + 1)
   hiddenAt.set(workspaceTabId, null)
 }
 
 export function markBrowserTabHidden(workspaceTabId: string): void {
+  const left = (mountedHosts.get(workspaceTabId) ?? 1) - 1
+  if (left > 0) {
+    mountedHosts.set(workspaceTabId, left)
+    return
+  }
+  mountedHosts.delete(workspaceTabId)
   hiddenAt.set(workspaceTabId, Date.now())
+}
+
+// How many of each tab's hosts are SHOWING its surface right now — told the
+// backend "visible" and not taken it back. Not the same as mounted: the file
+// column keeps its host mounted but CSS-hidden under a full-page route, while
+// the transcript's side panel over that route shows the same tab. Whether a
+// host may hide the page, or must leave it to the one showing it, is this.
+const showingHosts = new Map<string, number>()
+
+export function markBrowserHostShowing(key: string, showing: boolean): void {
+  const count = (showingHosts.get(key) ?? 0) + (showing ? 1 : -1)
+  if (count > 0) showingHosts.set(key, count)
+  else showingHosts.delete(key)
+}
+
+export function browserHostsShowing(key: string): number {
+  return showingHosts.get(key) ?? 0
 }
 
 /** Milliseconds-since-epoch the tab left the screen; `null` while it is on
@@ -193,6 +274,8 @@ export function removeBrowserTabState(workspaceTabId: string): void {
   const hadNotice = notices.delete(workspaceTabId)
   const hadDoc = docStates.delete(workspaceTabId)
   hiddenAt.delete(workspaceTabId)
+  mountedHosts.delete(workspaceTabId)
+  showingHosts.delete(workspaceTabId)
   findRequests.delete(workspaceTabId)
   boundsResyncs.delete(workspaceTabId)
   // Counted among the reasons to notify: a strip still mounted over a tab
@@ -201,12 +284,14 @@ export function removeBrowserTabState(workspaceTabId: string): void {
   // renders them on their own.
   const hadActivity = agentActivity.delete(workspaceTabId)
   const hadErrors = consoleErrors.delete(workspaceTabId)
+  const hadCreate = createOutcomes.delete(workspaceTabId)
   if (
     states.delete(workspaceTabId) ||
     hadNotice ||
     hadDoc ||
     hadActivity ||
-    hadErrors
+    hadErrors ||
+    hadCreate
   ) {
     notify()
   }
@@ -525,10 +610,13 @@ export function resetBrowserTabStoreForTests(): void {
   createdSurfaces.clear()
   surfaceOps.clear()
   hiddenAt.clear()
+  mountedHosts.clear()
+  showingHosts.clear()
   findRequests.clear()
   boundsResyncs.clear()
   agentActivity.clear()
   consoleErrors.clear()
+  createOutcomes.clear()
   suspendCloseRequests.clear()
 }
 

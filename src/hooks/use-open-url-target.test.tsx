@@ -35,6 +35,8 @@ vi.mock("@/lib/transport", () => ({
   isRemoteDesktopMode: () => mocks.remote,
   isDesktop: () => mocks.desktop,
   getTransport: () => ({ call: mocks.transportCall }),
+  getShellTransport: () => ({ call: mocks.transportCall }),
+  getServerBaseUrl: () => "https://dev.example.com",
 }))
 
 import {
@@ -61,6 +63,7 @@ const AVAILABLE = {
   profiles: false,
   signInUserAgent: false,
   ownedWindowControls: false,
+  remoteEgress: false,
   policy: { enabled: true, managedRules: [], managedSource: null },
 }
 
@@ -179,6 +182,19 @@ describe("useOpenUrlTarget", () => {
     expect(mocks.openBrowserTab).not.toHaveBeenCalled()
   })
 
+  it("hands a remote-workspace loopback address to the drawer as remote", () => {
+    mocks.remote = true
+    mocks.route = { isConversations: false }
+    mocks.viewerHost = { open: mocks.viewerOpen }
+    const { result } = renderHook(() => useOpenUrlTarget())
+    result.current("http://localhost:3000/", { source: "transcript" })
+    expect(mocks.viewerOpen).toHaveBeenCalledWith({
+      kind: "browser",
+      url: "http://localhost:3000/",
+      remote: true,
+    })
+  })
+
   it("without a workspace provider the built-in target is unavailable", () => {
     mocks.actions = null
     const { result } = renderHook(() => useOpenUrlTarget())
@@ -194,8 +210,19 @@ describe("useOpenUrlTarget", () => {
       source: "transcript",
       modifier: true,
     })
-    expect(action).toMatchObject({ kind: "builtin", remoteOverride: true })
-    expect(mocks.openBrowserTab).toHaveBeenCalledWith("http://localhost:3000/")
+    expect(action).toMatchObject({
+      kind: "builtin",
+      remoteOverride: true,
+      remote: true,
+    })
+    // As a tab of the remote host: in a profile of this computer the address
+    // would reach this machine's port 3000.
+    expect(mocks.openBrowserTab).toHaveBeenCalledWith(
+      "http://localhost:3000/",
+      {
+        remote: true,
+      }
+    )
   })
 
   it("routes mailto/tel to the OS handler and reports unsupported schemes", () => {

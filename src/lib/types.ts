@@ -3742,6 +3742,9 @@ export interface SkillSyncReport {
 export interface SystemProxySettings {
   enabled: boolean
   proxy_url: string | null
+  // Hosts that bypass the proxy, comma-separated. Optional because a server
+  // that predates the setting (a remote workspace) never sends it.
+  no_proxy?: string | null
 }
 
 export type AppLocale =

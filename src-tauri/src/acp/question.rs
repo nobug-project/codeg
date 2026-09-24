@@ -1187,17 +1187,6 @@ fn is_mcp_tool_call_approval(raw: &Value) -> bool {
         == Some("mcp_tool_call")
 }
 
-/// Codex's auto-resolution timeout for a `request_user_input` elicitation
-/// (`_meta.codex.autoResolutionMs`). When set, codex-acp races the elicitation
-/// against this timer and answers `{answers: {}}` itself on expiry — the
-/// connection handler mirrors it to reap the by-then-pointless card.
-pub fn elicitation_auto_resolution_ms(raw: &Value) -> Option<u64> {
-    raw.get("_meta")?
-        .get("codex")?
-        .get("autoResolutionMs")?
-        .as_u64()
-}
-
 /// Classify a form `elicitation/create` request (the raw JSON params) into its
 /// presentation plan. Everything codex-acp can send once `elicitation.form` is
 /// advertised lands here, so every shape must resolve to SOMETHING the user
@@ -2649,16 +2638,6 @@ mod tests {
         assert_eq!(v["action"], "decline");
         let v = serde_json::to_value(elicitation_cancel_response()).unwrap();
         assert_eq!(v["action"], "cancel");
-    }
-
-    #[test]
-    fn elicitation_auto_resolution_ms_reads_codex_meta() {
-        let mut raw = elicitation_raw(json!({}), json!([]));
-        assert_eq!(elicitation_auto_resolution_ms(&raw), None);
-        raw["_meta"] = json!({"codex": {"autoResolutionMs": 30000}});
-        assert_eq!(elicitation_auto_resolution_ms(&raw), Some(30000));
-        raw["_meta"] = json!({"codex": {"autoResolutionMs": null}});
-        assert_eq!(elicitation_auto_resolution_ms(&raw), None);
     }
 
     #[test]

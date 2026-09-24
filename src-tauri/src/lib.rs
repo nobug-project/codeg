@@ -535,6 +535,7 @@ mod tauri_app {
             ))
             .manage(ConnectionManager::new())
             .manage(crate::browser::BrowserRegistry::default())
+            .manage(crate::browser::egress::EgressRegistry::default())
             .manage(crate::browser::BrowserDownloads::default())
             .manage(crate::browser::DocGuests::default())
             .manage(crate::browser::confirm::EvalConsent::new())

@@ -66,6 +66,7 @@ import { openUrl } from "@/lib/platform"
 import { BrowserToolbar } from "./browser-toolbar"
 
 const toolbarMocks = vi.hoisted(() => ({
+  remoteDesktop: false,
   openBrowserTab: vi.fn(() => "browser:new"),
   workspaceActions: null as null | {
     openBrowserTab: (...a: unknown[]) => unknown
@@ -92,6 +93,10 @@ vi.mock("@/lib/browser/browser-api", () => ({
   browserPickElement: vi.fn(),
 }))
 vi.mock("@/lib/platform", () => ({ openUrl: vi.fn() }))
+vi.mock(import("@/lib/transport"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRemoteDesktopMode: () => toolbarMocks.remoteDesktop,
+}))
 
 function tabIn(
   profile: string,
@@ -511,5 +516,152 @@ describe("BrowserToolbar and the agent activity record", () => {
     })
     expect(vi.mocked(browserNavigate)).not.toHaveBeenCalled()
     expect(record()).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A window bound to a remote codeg-server
+// ---------------------------------------------------------------------------
+
+describe("BrowserToolbar in a remote workspace window", () => {
+  beforeEach(() => {
+    resetBrowserPrefsForTests()
+    resetBrowserTabStoreForTests()
+    vi.mocked(browserNavigate).mockClear()
+    toolbarMocks.openBrowserTab.mockClear()
+    toolbarMocks.workspaceActions = {
+      openBrowserTab: toolbarMocks.openBrowserTab,
+    }
+    toolbarMocks.remoteDesktop = true
+  })
+  afterEach(() => {
+    toolbarMocks.remoteDesktop = false
+    resetBrowserTabStoreForTests()
+  })
+
+  function unsharedState(): BrowserTabState {
+    return { ...sharedState(), agentGrant: null }
+  }
+
+  // This tab is a page of THIS computer; typed here, `localhost:3000` would
+  // reach this machine instead of the host the workspace runs on.
+  it("opens a typed loopback address as a tab of the remote host", async () => {
+    renderToolbar("default", undefined, unsharedState())
+    const bar = screen.getByRole("textbox", { name: "Enter an address" })
+    await act(async () => {
+      fireEvent.change(bar, { target: { value: "localhost:3000/app" } })
+      fireEvent.keyDown(bar, { key: "Enter" })
+    })
+    expect(toolbarMocks.openBrowserTab).toHaveBeenCalledWith(
+      "http://localhost:3000/app",
+      { remote: true, openerTabId: "browser:abc" }
+    )
+    expect(vi.mocked(browserNavigate)).not.toHaveBeenCalled()
+    // The bar goes back to what this tab is showing.
+    expect(bar).toHaveValue("https://example.com/")
+  })
+
+  // With no tab strip to open a remote tab in, the address goes nowhere —
+  // never into this tab, where it would reach this computer.
+  it("refuses a typed loopback address when there is nowhere to open it", async () => {
+    toolbarMocks.workspaceActions = null
+    renderToolbar("default", undefined, unsharedState())
+    const bar = screen.getByRole("textbox", { name: "Enter an address" })
+    await act(async () => {
+      fireEvent.change(bar, { target: { value: "127.0.0.1:8080" } })
+      fireEvent.keyDown(bar, { key: "Enter" })
+    })
+    expect(vi.mocked(browserNavigate)).not.toHaveBeenCalled()
+  })
+
+  it("navigates a typed public address in place, as anywhere else", async () => {
+    renderToolbar("default", undefined, unsharedState())
+    const bar = screen.getByRole("textbox", { name: "Enter an address" })
+    await act(async () => {
+      fireEvent.change(bar, { target: { value: "example.com/next" } })
+      fireEvent.keyDown(bar, { key: "Enter" })
+    })
+    expect(vi.mocked(browserNavigate)).toHaveBeenCalledWith(
+      "abc",
+      "https://example.com/next"
+    )
+    expect(toolbarMocks.openBrowserTab).not.toHaveBeenCalled()
+  })
+
+  describe("on a tab of the remote host", () => {
+    function renderRemoteTab(url = "http://remote.localhost:3000/app") {
+      const remoteTab = {
+        ...tabIn("default", url),
+        browser: {
+          initialUrl: url,
+          openerTabId: null,
+          profile: "default",
+          remote: true,
+        },
+      } as BrowserWorkspaceTab
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <BrowserToolbar
+            tab={remoteTab}
+            state={{ ...unsharedState(), url, profile: "remote-4" }}
+          />
+        </NextIntlClientProvider>
+      )
+    }
+
+    // Everything a remote tab loads comes from the remote host: another of
+    // its addresses is simply where this tab goes next.
+    it("navigates a typed loopback address in place", async () => {
+      renderRemoteTab()
+      const bar = screen.getByRole("textbox", { name: "Enter an address" })
+      await act(async () => {
+        fireEvent.change(bar, { target: { value: "localhost:5173" } })
+        fireEvent.keyDown(bar, { key: "Enter" })
+      })
+      expect(vi.mocked(browserNavigate)).toHaveBeenCalledWith(
+        "abc",
+        "http://localhost:5173/"
+      )
+      expect(toolbarMocks.openBrowserTab).not.toHaveBeenCalled()
+    })
+
+    it("has no profile to choose and no system browser to hand the page to", async () => {
+      setBrowserProfiles([{ id: "p-work", name: "Work" }])
+      renderRemoteTab()
+      expect(screen.queryByRole("button", { name: /^Profile:/ })).toBeNull()
+      await openMenu(screen.getByRole("button", { name: "More" }))
+      expect(
+        await screen.findByRole("menuitem", { name: "Copy link" })
+      ).toBeVisible()
+      expect(
+        screen.queryByRole("menuitem", { name: "Open in system browser" })
+      ).toBeNull()
+    })
+
+    // The macOS alias names nothing outside this tab.
+    it("copies the link as the remote host knows it", async () => {
+      const copied = vi.fn()
+      Object.assign(navigator, { clipboard: { writeText: copied } })
+      copied.mockResolvedValue(undefined)
+      renderRemoteTab("http://remote.localhost:3000/app?x=1")
+      await openMenu(screen.getByRole("button", { name: "More" }))
+      await act(async () => {
+        fireEvent.click(
+          await screen.findByRole("menuitem", { name: "Copy link" })
+        )
+      })
+      expect(copied).toHaveBeenCalledWith("http://localhost:3000/app?x=1")
+    })
+  })
+
+  // Its agents run on the remote host and cannot reach this browser.
+  it("offers no sharing with agents, and says why", () => {
+    renderToolbar("default", undefined, unsharedState())
+    const share = screen.getByRole("button", { name: "Share with agents" })
+    expect(share).toBeDisabled()
+    expect(share).toHaveAttribute(
+      "title",
+      "Agents of a remote workspace run on its host and can't use this computer's browser"
+    )
   })
 })

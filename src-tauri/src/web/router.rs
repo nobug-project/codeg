@@ -1820,9 +1820,13 @@ pub fn build_router(
         },
     ));
 
-    // WebSocket route (auth via Sec-WebSocket-Protocol)
+    // WebSocket routes (auth via Sec-WebSocket-Protocol)
     let ws_route = Router::new()
         .route("/ws/events", get(ws::ws_handler))
+        .route(
+            crate::web::browser_tunnel::frame::TUNNEL_PATH,
+            get(crate::web::browser_tunnel::ws_handler),
+        )
         .layer(middleware::from_fn(move |req, next| {
             auth::require_token(req, next, token_for_ws.clone())
         }));

@@ -67,6 +67,7 @@ function capabilitiesWith(proxy: {
     profiles: true,
     signInUserAgent: true,
     ownedWindowControls: false,
+    remoteEgress: false,
     policy: { enabled: true, managedRules: [], managedSource: null },
   }
 }
@@ -79,6 +80,7 @@ function capabilitiesWithoutProfiles() {
     profiles: false,
     signInUserAgent: false,
     ownedWindowControls: false,
+    remoteEgress: false,
   }
 }
 
@@ -278,6 +280,7 @@ describe("BrowserSettings", () => {
       profiles: false,
       signInUserAgent: false,
       ownedWindowControls: false,
+      remoteEgress: false,
     })
     await renderSection()
     await waitFor(() =>

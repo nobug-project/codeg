@@ -26,6 +26,7 @@ import {
   type HtmlPreviewEngine,
 } from "@/lib/browser/browser-prefs"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
+import { isRemoteDesktopMode } from "@/lib/transport"
 import { cn } from "@/lib/utils"
 
 // Trusted sandbox: scripts run, popups/forms/modals work, but the frame still
@@ -95,7 +96,14 @@ export function HtmlPreview({
   const prefs = useBrowserPrefs()
   const capabilities = useBrowserCapabilities()
   const override = useEngineOverride(tab.id)
-  const guestAvailable = capabilities?.docGuest === true && Boolean(tab.path)
+  // The document viewer reads the file straight off THIS computer's disk. A
+  // window bound to a remote codeg-server shows that host's files, which only
+  // the inline preview reads, through the server — on this disk the same
+  // path is some other file or none at all.
+  const guestAvailable =
+    capabilities?.docGuest === true &&
+    Boolean(tab.path) &&
+    !isRemoteDesktopMode()
   const engine: HtmlPreviewEngine = !guestAvailable
     ? "inline"
     : (override ?? prefs.htmlPreviewEngine)

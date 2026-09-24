@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
         profiles: false,
         signInUserAgent: false,
         ownedWindowControls: false,
+        remoteEgress: false,
         policy: { enabled: true, managedRules: [], managedSource: null },
       })
   ),
@@ -198,6 +199,7 @@ describe("BrowserTabsPersistence", () => {
         profiles: false,
         signInUserAgent: false,
         ownedWindowControls: false,
+        remoteEgress: false,
         policy: { enabled: true, managedRules: [], managedSource: null },
       })
       await Promise.resolve()
@@ -254,6 +256,7 @@ describe("BrowserTabsPersistence", () => {
       profiles: false,
       signInUserAgent: false,
       ownedWindowControls: false,
+      remoteEgress: false,
       policy: { enabled: true, managedRules: [], managedSource: null },
     })
     render(<BrowserTabsPersistence />)

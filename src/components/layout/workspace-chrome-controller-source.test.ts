@@ -47,6 +47,14 @@ describe("tab close/navigation shortcuts live in the always-mounted controller",
     expect(controllerSource).toMatch(/closeAllFileTabs\(/)
   })
 
+  // A closed remote tab (an address of the remote codeg host) must reopen as
+  // one: reopened as an ordinary tab it would load this machine's port.
+  it("reopens a remote browser tab as remote", () => {
+    expect(controllerSource).toMatch(
+      /openBrowserTab\(closed\.url, \{[\s\S]*?closed\.remote === true \? \{ remote: true \}/
+    )
+  })
+
   // Ctrl+<digit> is a terminal control code (Ctrl+6 is vim's alternate-file
   // Ctrl+^), so the numbered jump has to decline inside the terminal region —
   // the same carve-out the zoom listener makes for Ctrl+-/Ctrl+=. Cmd+<digit>

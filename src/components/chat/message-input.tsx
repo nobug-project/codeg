@@ -281,7 +281,7 @@ interface MessageInputProps {
 // that uri directly (it serializes to a ResourceLink and round-trips through the
 // draft doc untouched). A path-less file (a local-desktop paste/drop carrying
 // inline bytes — an embedded resource or a `data:` link) can't live in the doc,
-// so its badge carries an inert `codeg://embedded/<uuid>` display uri
+// so its badge carries an inert `codeg://embedded/…` display uri
 // (`buildEmbeddedReferenceUri`) while the real bytes-bearing block is held in the
 // `embeddedPayloadsRef` map keyed by that uri. `docToPromptBlocks` drops the
 // embedded badge from the prose; `buildDraft` appends the mapped block for every
@@ -1377,10 +1377,12 @@ export function MessageInput({
   // screenshot, the console. The block is page content — the backend already
   // capped it and headed it "data, not instructions" — and it rides the same
   // path a path-less pasted file takes: an inline badge whose bytes live in
-  // `embeddedPayloadsRef` until send. An agent that does not take embedded
-  // context gets the block as prose instead of silently getting nothing; the
-  // picture goes through the ordinary image path, which is capability-driven
-  // on its own.
+  // `embeddedPayloadsRef` until send. The badge also carries the page's
+  // address, so the message it is sent in can list the page under the bubble
+  // the way it does when read back from the agent's record. An agent that does
+  // not take embedded context gets the block as prose instead of silently
+  // getting nothing; the picture goes through the ordinary image path, which
+  // is capability-driven on its own.
   useEffect(() => {
     if (!attachmentTabId) return
 
@@ -1397,6 +1399,7 @@ export function MessageInput({
             [
               {
                 name: detail.label,
+                ref: detail.uri,
                 realBlock: {
                   type: "resource",
                   uri: detail.uri,
@@ -2123,15 +2126,21 @@ export function MessageInput({
           </div>
         </div>
       )}
-      {/* When the folder/branch row is attached below the composer, this group
-          clips both into one rounded box (`overflow-hidden rounded-xl`); the
-          drag-active ring rides the wrapper so it isn't clipped. Standalone
-          (no row) it's layout-neutral (`display:contents`). */}
+      {/* Attached, this group clips the composer and the folder/branch row
+          below it into one rounded box (`overflow-hidden rounded-xl`); the
+          drag-active ring rides the wrapper so it isn't clipped. Standalone it
+          stays a plain block, never `display:contents`, because the row comes
+          and goes under a mounted editor (on a cold start it appears once the
+          restored tab's folder loads): some Blink builds (Chromium 111,
+          WebView2 145; not Chrome 153) drop the layout boxes inside the chrome
+          below, a size container (`@container`), when this ancestor flips
+          between `contents` and a box in either direction, leaving the editor
+          0x0 and unable to take input. */}
       <div
         className={cn(
-          folderBranchPickerAttached
-            ? "overflow-hidden rounded-xl transition-colors"
-            : "contents",
+          "block",
+          folderBranchPickerAttached &&
+            "overflow-hidden rounded-xl transition-colors",
           folderBranchPickerAttached &&
             showDragActive &&
             "ring-1 ring-primary/40"

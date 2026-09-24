@@ -110,7 +110,10 @@ export function BrowserServiceBridge() {
         // than an unvisited tab next to an empty column — but the pane is
         // left where it is: a server coming up may show its page, it may not
         // pull someone out of the conversation they are reading.
-        openBrowserTabRef.current?.(action.url, { activate: "tab" })
+        openBrowserTabRef.current?.(action.url, {
+          activate: "tab",
+          ...(action.remote ? { remote: true } : {}),
+        })
         return
       }
       notify(service)

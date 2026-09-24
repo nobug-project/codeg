@@ -60,6 +60,7 @@ describe("browser wire types", () => {
       profiles: false,
       signInUserAgent: false,
       ownedWindowControls: false,
+      remoteEgress: false,
       policy: {
         enabled: true,
         managedRules: [{ pattern: "*.internal.example", action: "block" }],

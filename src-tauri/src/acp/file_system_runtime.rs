@@ -526,9 +526,9 @@ pub(crate) fn child_home_dir(runtime_env: &BTreeMap<String, String>) -> Option<P
 ///
 /// * non-blank in `runtime_env` — `merge_agent_env` gives `runtime_env` the
 ///   highest precedence, so this REPLACES the parent's value in the child.
-/// * blank in `runtime_env` — the vendored spawn layer treats an empty value as
-///   `env_remove` ("an empty value means ensure this var is ABSENT from the
-///   child", `acp/agent_process.rs`). The child therefore does NOT
+/// * blank in `runtime_env` — the spawn layer (`acp::agent_process`) treats an
+///   empty value as `env_remove` ("an empty value means ensure this var is
+///   ABSENT from the child"). The child therefore does NOT
 ///   inherit our value; the agent falls back to its own default. Reading through
 ///   to our process env here would point the root at a profile the child never
 ///   opens, re-breaking the writes this change exists to allow.
@@ -1761,10 +1761,11 @@ mod tests {
         agent_data_roots(agent_type, &blanked)
     }
 
-    /// A BLANK value in `env_json` is not "unset, use ours" — the vendored spawn
-    /// layer `env_remove`s it, so the child falls back to its OWN default. Reading
-    /// through to codeg's process env would aim the root at a profile the child
-    /// never opens, re-breaking the writes this change exists to allow.
+    /// A BLANK value in `env_json` is not "unset, use ours" — the spawn layer
+    /// (`acp::agent_process`) `env_remove`s it, so the child falls back to its
+    /// OWN default. Reading through to codeg's process env would aim the root
+    /// at a profile the child never opens, re-breaking the writes this change
+    /// exists to allow.
     #[test]
     fn blank_runtime_value_falls_back_to_the_agents_default_not_our_env() {
         let home = dirs::home_dir().expect("home dir");

@@ -3,13 +3,14 @@
 //!
 //! codeg's own copy of the `AcpAgent` transport. It started life as the
 //! `sacp-tokio` crate (vendored with codeg's patches) and moved in-tree when
-//! codeg switched to the official `agent-client-protocol` runtime: that crate
-//! ships an `AcpAgent` too, but it is built on `async-process` and carries none
-//! of the behaviour below, all of which codeg depends on —
+//! codeg switched to the official `agent-client-protocol` runtime. That crate
+//! ships an `AcpAgent` too — built on `async-process`; on Unix it starts the
+//! child in its own process group and kills the group on drop — but it has no
+//! room for the rest of what codeg depends on:
 //!
-//! * the whole process TREE is killed on drop (`kill_tree`), not just the
-//!   direct child, so an `npx`/`node` launcher cannot leave the real agent
-//!   behind;
+//! * the whole process TREE is killed on drop (`kill_tree`), on every platform
+//!   and including descendants that left the child's process group, so an
+//!   `npx`/`node` launcher cannot leave the real agent behind;
 //! * [`AcpAgent::with_current_dir`] sets the child's cwd (Hermes derives its
 //!   working directory from the process cwd, not from `session/new`);
 //! * an EMPTY env value means "remove the inherited variable" rather than "set

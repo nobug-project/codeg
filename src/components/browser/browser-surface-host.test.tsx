@@ -33,16 +33,25 @@ vi.mock("@/contexts/workspace-context", () => ({
     filesMaximized: false,
   }),
 }))
+const routeMock = vi.hoisted(() => ({
+  current: null as null | { isConversations: boolean },
+}))
 vi.mock("@/contexts/workbench-route-context", () => ({
-  useOptionalWorkbenchRoute: () => null,
+  useOptionalWorkbenchRoute: () => routeMock.current,
 }))
 vi.mock("@/components/ui/overlay-host-hidden", () => ({
   useOverlayHostHidden: () => false,
 }))
 
-import { BrowserSurfaceHost, NativeSurfaceHost } from "./browser-surface-host"
 import {
+  BrowserSurfaceHost,
+  NativeSurfaceBesideRoute,
+  NativeSurfaceHost,
+} from "./browser-surface-host"
+import {
+  getBrowserCreateOutcome,
   getBrowserTabState,
+  hasSurfaceClaim,
   requestBrowserBoundsResync,
   resetBrowserTabStoreForTests,
   setBrowserTabState,
@@ -168,6 +177,7 @@ describe("BrowserSurfaceHost", () => {
   })
   afterEach(() => {
     vi.restoreAllMocks()
+    routeMock.current = null
   })
 
   it("creates the surface once at its rect, hides it under an overlay lease, and hides on unmount", async () => {
@@ -208,6 +218,201 @@ describe("BrowserSurfaceHost", () => {
       false,
       false
     )
+  })
+
+  // A remote tab: opened through its connection, saying so while that takes
+  // a moment, and leaving a refusal where any host of the tab can see it.
+  it("opens a remote tab through its connection and records a refusal for every host", async () => {
+    let refuse: (error: unknown) => void = () => {}
+    api.browserOpenTab.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          refuse = reject
+        })
+    )
+    const { container, getByText } = render(
+      <BrowserSurfaceHost
+        tab={tab("remote1")}
+        egress={4}
+        showCreateError={false}
+        pendingLabel="Connecting through box…"
+      />
+    )
+    await flush()
+    expect(api.browserOpenTab.mock.calls[0][0]).toMatchObject({
+      tabId: "remote1",
+      egress: 4,
+    })
+    expect(getByText("Connecting through box…")).toBeInTheDocument()
+    expect(getBrowserCreateOutcome("browser:remote1")).toEqual({
+      kind: "pending",
+    })
+    const error = new Error("the tunnel is down")
+    await act(async () => {
+      refuse(error)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(getBrowserCreateOutcome("browser:remote1")).toEqual({
+      kind: "failed",
+      error,
+    })
+    // The caller shows it; this host says nothing of its own.
+    expect(container).not.toHaveTextContent("Connecting through box…")
+    expect(container).not.toHaveTextContent("the tunnel is down")
+    // The claim is let go, so the tab can ask again.
+    expect(hasSurfaceClaim("remote1")).toBe(false)
+  })
+
+  // The host that asked went away before the answer, and the one showing the
+  // tab now never asked: the refusal is still that one's to show.
+  it("shows a refusal on a host that did not ask for the surface", async () => {
+    let refuse: (error: unknown) => void = () => {}
+    api.browserOpenTab.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          refuse = reject
+        })
+    )
+    const first = render(<BrowserSurfaceHost tab={tab("again1")} />)
+    await flush()
+    first.unmount()
+    const second = render(<BrowserSurfaceHost tab={tab("again1")} />)
+    await flush()
+    // The second host could not claim what the first one holds.
+    expect(api.browserOpenTab).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      refuse(new Error("refused for a reason"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(second.container).toHaveTextContent("refused for a reason")
+    second.unmount()
+  })
+
+  // The host that asked went away before the answer, and nothing else shows
+  // the tab: the hide it sent on its way out found no tab yet, so the new
+  // surface is hidden when it arrives rather than left painted on screen.
+  it("hides a surface that arrives after every host of its tab is gone", async () => {
+    let answer: (state: BrowserTabState) => void = () => {}
+    api.browserOpenTab.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const { unmount } = render(<BrowserSurfaceHost tab={tab("late1")} />)
+    await flush()
+    unmount()
+    api.browserSetVisible.mockClear()
+    await act(async () => {
+      answer(state("late1"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(api.browserSetVisible).toHaveBeenCalledWith("late1", false, false)
+    expect(getBrowserCreateOutcome("browser:late1")).toBeNull()
+  })
+
+  // The drawer and a pane both showed the tab, and the one that asked went
+  // away: the other is still on screen, so nothing hides the page it shows.
+  it("leaves a late surface up while another host still shows its tab", async () => {
+    let answer: (state: BrowserTabState) => void = () => {}
+    api.browserOpenTab.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const { rerender } = render(
+      <>
+        <BrowserSurfaceHost key="asker" tab={tab("dual1")} />
+        <BrowserSurfaceHost key="other" tab={tab("dual1")} />
+      </>
+    )
+    await flush()
+    expect(api.browserOpenTab).toHaveBeenCalledTimes(1)
+    api.browserSetVisible.mockClear()
+    rerender(
+      <>
+        <BrowserSurfaceHost key="other" tab={tab("dual1")} />
+      </>
+    )
+    await flush()
+    await act(async () => {
+      answer(state("dual1"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await flush()
+    expect(api.browserSetVisible).not.toHaveBeenCalledWith(
+      "dual1",
+      false,
+      expect.anything()
+    )
+    expect(api.browserSetVisible).toHaveBeenCalledWith("dual1", true, false)
+  })
+
+  // A full-page route hides the file column, and with it the hosts inside
+  // it; the transcript's side panel over that route is not hidden by it.
+  it("shows a host beside the route while a full-page route is up, and only that one", async () => {
+    routeMock.current = { isConversations: false }
+    api.browserOpenTab.mockImplementation(() =>
+      Promise.resolve(state("route1"))
+    )
+    const inColumn = render(<BrowserSurfaceHost tab={tab("route1")} />)
+    await flush()
+    expect(api.browserSetVisible).not.toHaveBeenCalledWith(
+      "route1",
+      true,
+      false
+    )
+    inColumn.unmount()
+
+    api.browserOpenTab.mockImplementation(() =>
+      Promise.resolve(state("route2"))
+    )
+    render(
+      <NativeSurfaceBesideRoute.Provider value={true}>
+        <BrowserSurfaceHost tab={tab("route2")} />
+      </NativeSurfaceBesideRoute.Provider>
+    )
+    await flush()
+    expect(api.browserSetVisible).toHaveBeenCalledWith("route2", true, false)
+    expect(api.browserSetVisible).not.toHaveBeenCalledWith(
+      "route2",
+      false,
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  // The file column holds the tab too, mounted but hidden under the route:
+  // it must not hide the page the side panel shows — and when the panel
+  // goes, the page goes off screen with it.
+  it("lets the host that shows a tab decide over a hidden one of the same tab", async () => {
+    routeMock.current = { isConversations: false }
+    api.browserOpenTab.mockImplementation(() => Promise.resolve(state("pair1")))
+    const { rerender } = render(
+      <>
+        <NativeSurfaceBesideRoute.Provider value={true}>
+          <BrowserSurfaceHost key="panel" tab={tab("pair1")} />
+        </NativeSurfaceBesideRoute.Provider>
+        <BrowserSurfaceHost key="column" tab={tab("pair1")} />
+      </>
+    )
+    await flush()
+    await flush()
+    const hides = () =>
+      api.browserSetVisible.mock.calls.filter(
+        ([id, visible]) => id === "pair1" && visible === false
+      ).length
+    expect(hides()).toBe(0)
+    expect(api.browserSetVisible).toHaveBeenCalledWith("pair1", true, false)
+
+    rerender(
+      <>
+        <BrowserSurfaceHost key="column" tab={tab("pair1")} />
+      </>
+    )
+    await flush()
+    expect(hides()).toBeGreaterThan(0)
   })
 
   it("tears a destroy-on-unmount surface down instead of hiding it", async () => {

@@ -82,6 +82,7 @@ vi.mock("@/hooks/use-enabled-skill-ids", () => ({
 vi.mock("@/components/chat/composer/use-reference-search", () => ({
   useReferenceSearch: () => async () => [],
 }))
+const folderPickerVisible = vi.hoisted(() => vi.fn(() => false))
 vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationContextBar: ({
     extraContent,
@@ -89,10 +90,15 @@ vi.mock("@/components/chat/conversation-context-bar", () => ({
     extraContent?: React.ReactNode
   }) => <div data-testid="ctx-bar">{extraContent}</div>,
   // The composer imports these to render the below-input folder/branch row.
-  // Keep it hidden here (visibility → false) so these tests exercise the bare
-  // composer without pulling in the picker's tab-store/git dependencies.
+  // Hidden by default; the cold-start test resolves it after the editor mounts.
   ConversationFolderBranchPicker: () => null,
-  useConversationFolderBranchPickerVisible: () => false,
+  useConversationFolderBranchPickerVisible: folderPickerVisible,
+}))
+vi.mock("./composer-context-usage", () => ({
+  ComposerContextUsage: () => null,
+}))
+vi.mock("./composer-connection-status", () => ({
+  ComposerConnectionStatus: () => null,
 }))
 // The platform opener is the DESKTOP arm of the shared opener; this suite runs
 // in web mode, where a system-browser target lands on `window.open` instead.
@@ -449,9 +455,12 @@ describe("MessageInput attach-to-chat insertion position", () => {
       )
     )
     const text = serializeDocToDisplayText(editor.state.doc)
-    // A badge, not the block itself.
+    // A badge, not the block itself — one that carries the page's address,
+    // which is what the sent message lists under the bubble.
     expect(text).not.toContain("Captured from a web page")
-    expect(text).toMatch(/\[button#export]\(codeg:\/\/embedded\//)
+    expect(text).toMatch(
+      /\[button#export]\(codeg:\/\/embedded\/https%3A%2F%2Fexample\.com%2Forders#[^)\s]+\)/
+    )
   })
 
   // Nobody typed this badge, so taking it back has to be as cheap as one key.
@@ -1525,6 +1534,55 @@ describe("MessageInput queue-edit restore vs. a late command list", () => {
     flush()
     expect(composerHandle.current?.getText()).toBe("the next one")
   })
+
+  // A queued page comes back as the badge it was queued as. Named after its
+  // uri instead, a marked-up screenshot of google.com came back as
+  // "www.google.com" — and a page with a path as its last segment.
+  it("restores a queued page as the badge it was queued as", async () => {
+    const { flush } = captureFrames()
+    renderInput({
+      availableCommands: NO_COMMANDS,
+      isEditingQueueItem: true,
+      editingItemId: "q3",
+      editingDraftBlocks: [
+        {
+          type: "resource",
+          uri: "https://shop.test/orders/42",
+          mime_type: "text/markdown",
+          text: [
+            "Captured from a web page in the built-in browser at the person's request.",
+            "",
+            "- page: Orders — https://shop.test/orders/42",
+            "- screenshot: the visible 1200×800 CSS px of the page",
+            "- markup: the person drew 1 numbered mark on this screenshot, in red",
+            "  1. box: 20×20 CSS px at (10, 10)",
+          ].join("\n"),
+          blob: null,
+        },
+        {
+          type: "resource",
+          uri: "clipboard://notes.md-1",
+          mime_type: "text/markdown",
+          text: "# Notes",
+          blob: null,
+        },
+      ],
+    })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    flush()
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    const text = serializeDocToDisplayText(editor.state.doc)
+    // Named by what it is, and carrying the page for the chip it gets once sent.
+    expect(text).toMatch(
+      /\[Marked-up screenshot]\(codeg:\/\/embedded\/https%3A%2F%2Fshop\.test%2Forders%2F42#[^)\s]+\)/
+    )
+    // Anything that is not a page keeps the name its uri gives it.
+    expect(text).toMatch(/\[notes\.md-1]\(codeg:\/\/embedded\/[^)\s#]+\)/)
+  })
 })
 
 describe("MessageInput mid-turn send (live-feedback channel)", () => {
@@ -2320,5 +2378,52 @@ describe("MessageInput composer box sizing (#746)", () => {
       editorRoot.compareDocumentPosition(actionRow!) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
+  })
+})
+
+describe("MessageInput folder data arriving after mount", () => {
+  afterEach(() => {
+    cleanup()
+    folderPickerVisible.mockReturnValue(false)
+  })
+
+  it("keeps a block wrapper and the editable draft when the folder row appears", async () => {
+    const input = (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} />
+      </NextIntlClientProvider>
+    )
+    const { container, rerender } = render(input)
+    await waitFor(() =>
+      expect(composerHandle.current?.getEditor()).toBeTruthy()
+    )
+    const handle = composerHandle.current!
+    const editor = handle.getEditor()!
+    const editorDom = editor.view.dom
+    act(() => handle.insertTextAtCursor("keep this draft"))
+    const chrome = container.querySelector(".codeg-composer-chrome")!
+    const wrapper = chrome.parentElement!
+    // jsdom has no layout engine, so it cannot reproduce the collapse; this
+    // pins the class contract that avoids it. One class per negative
+    // assertion: `not.toHaveClass(a, b)` passes as soon as either is missing.
+    // Unattached, nothing may clip the chrome's outer focus ring.
+    expect(wrapper).toHaveClass("block")
+    expect(wrapper).not.toHaveClass("contents")
+    expect(wrapper).not.toHaveClass("overflow-hidden")
+
+    folderPickerVisible.mockReturnValue(true)
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} />
+      </NextIntlClientProvider>
+    )
+    expect(chrome.parentElement).toBe(wrapper)
+    expect(wrapper).toHaveClass("block", "overflow-hidden")
+    expect(wrapper).not.toHaveClass("contents")
+    expect(composerHandle.current!.getEditor()).toBe(editor)
+    expect(editor.view.dom).toBe(editorDom)
+    expect(handle.getText()).toBe("keep this draft")
+    act(() => editor.commands.undo())
+    expect(handle.getText()).toBe("")
   })
 })

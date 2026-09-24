@@ -74,6 +74,8 @@ pub mod doc_guest;
 #[cfg(feature = "tauri-runtime")]
 pub mod downloads;
 #[cfg(feature = "tauri-runtime")]
+pub mod egress;
+#[cfg(feature = "tauri-runtime")]
 pub mod events;
 #[cfg(feature = "tauri-runtime")]
 pub mod handoff;
@@ -89,6 +91,8 @@ pub mod policy;
 pub mod profile;
 #[cfg(feature = "tauri-runtime")]
 pub mod registry;
+#[cfg(feature = "tauri-runtime")]
+pub mod remote;
 #[cfg(feature = "tauri-runtime")]
 pub mod surface;
 #[cfg(all(

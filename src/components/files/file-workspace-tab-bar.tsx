@@ -284,7 +284,10 @@ function FileTabAddMenu() {
   // than showing addresses nobody vouched for.
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      if (!open || !canOpenBrowser) return
+      // The servers this computer's terminals started. A window bound to a
+      // remote codeg-server runs its terminals there, so none of these is
+      // one of its own — and `localhost` in its list would be ambiguous.
+      if (!open || !canOpenBrowser || isRemoteDesktopMode()) return
       void browserListServices()
         .then(setServices)
         .catch(() => setServices([]))

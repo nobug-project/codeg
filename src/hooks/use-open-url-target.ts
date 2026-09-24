@@ -4,7 +4,10 @@ import { useCallback } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { useSessionViewerHost } from "@/components/message/session-viewer-host-context"
+import {
+  useSessionViewerHost,
+  type BrowserRequest,
+} from "@/components/message/session-viewer-host-context"
 import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import {
@@ -23,6 +26,7 @@ import {
   type LinkTarget,
 } from "@/lib/browser/browser-prefs"
 import { displayHostPort } from "@/lib/browser/browser-url"
+import { remoteServerHost } from "@/lib/browser/remote-host"
 import { openInSystemBrowser, openWithOsHandler } from "@/lib/link-open"
 import { classifyLinkTarget } from "@/lib/link-classify"
 import {
@@ -86,6 +90,7 @@ export function useLinkDecision() {
         fileColumnVisible,
         viewerHostAvailable: viewerHost !== null,
         remoteDesktop: isRemoteDesktopMode(),
+        remoteServerHost: remoteServerHost(),
         // Before the answer is in, a loopback link opens as it always did
         // (a new tab) rather than waiting out the gesture.
         bridgeAvailable:
@@ -140,12 +145,18 @@ export function useOpenUrlTarget() {
           void openWithOsHandler(action.url)
           break
         case "builtin": {
+          // `remote` rides along to wherever the page opens: an address on
+          // the remote codeg host must not load in a profile of this computer.
+          const request: BrowserRequest = action.remote
+            ? { kind: "browser", url: action.url, remote: true }
+            : { kind: "browser", url: action.url }
           if (action.placement === "drawer" && viewerHost) {
-            viewerHost.open({ kind: "browser", url: action.url })
+            viewerHost.open(request)
           } else if (openBrowserTab) {
-            openBrowserTab(action.url)
+            if (action.remote) openBrowserTab(action.url, { remote: true })
+            else openBrowserTab(action.url)
           } else if (viewerHost) {
-            viewerHost.open({ kind: "browser", url: action.url })
+            viewerHost.open(request)
           }
           // The first-open notice offers the "system browser always"
           // preference, which is the desktop's; a bridged dev server in web

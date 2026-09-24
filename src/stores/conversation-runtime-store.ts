@@ -3198,7 +3198,7 @@ function computeTimelinePrefix(
     liveStartedAt: session.liveMessage?.startedAt ?? null,
     // Content, not identity: the set is rebuilt on every streaming batch, and
     // an ordinary turn's `""` keeps the cache hitting exactly as before.
-    steeredCopyKey: steeredCopyIds ? [...steeredCopyIds].join(" ") : "",
+    steeredCopyKey: steeredCopyIds ? [...steeredCopyIds].join("\x00") : "",
     liveStreamedRoundStart,
   }
   if (detail) {
@@ -4305,6 +4305,44 @@ export function getRuntimeSession(
   )
 }
 
+// Sessions a view released on unmount, each waiting one task for its removal.
+const pendingSessionReleases = new Map<number, ReturnType<typeof setTimeout>>()
+
+/**
+ * Remove a runtime session once the current task is over, unless a view claims
+ * it first (`claimRuntimeSession`).
+ *
+ * This is how a conversation view gives up its session on unmount, because an
+ * unmount cannot tell that a view is about to mount straight back onto the
+ * same session: React StrictMode replays the effects of every fresh mount in
+ * development, and the desktop/mobile layout swap remounts every view in one
+ * commit. Neither moves the tab, so neither is a reparent, and removing the
+ * session on the spot emptied the transcript under the view that came back —
+ * its live-message sink recreates the session with live data and no detail,
+ * and `fetchDetail` skips a session that already has live data.
+ */
+export function releaseRuntimeSession(conversationId: number): void {
+  const pending = pendingSessionReleases.get(conversationId)
+  if (pending != null) clearTimeout(pending)
+  pendingSessionReleases.set(
+    conversationId,
+    setTimeout(() => {
+      pendingSessionReleases.delete(conversationId)
+      useConversationRuntimeStore
+        .getState()
+        .actions.removeConversation(conversationId)
+    }, 0)
+  )
+}
+
+/** Keep a session a view is mounting on: cancels its pending release. */
+export function claimRuntimeSession(conversationId: number): void {
+  const pending = pendingSessionReleases.get(conversationId)
+  if (pending == null) return
+  clearTimeout(pending)
+  pendingSessionReleases.delete(conversationId)
+}
+
 /** Resolve a runtime conversation id from an agent's external session id. */
 export function getConversationIdByExternalIdFromStore(
   externalId: string
@@ -4358,6 +4396,8 @@ export function resetConversationRuntimeStore(): void {
   fetchGeneration.clear()
   for (const cancel of viewerDetailSyncCancels.values()) cancel()
   viewerDetailSyncCancels.clear()
+  for (const pending of pendingSessionReleases.values()) clearTimeout(pending)
+  pendingSessionReleases.clear()
   timelineCache = new WeakMap()
   timelinePrefixCache = new WeakMap()
   useConversationRuntimeStore.setState({

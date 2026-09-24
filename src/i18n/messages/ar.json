@@ -241,6 +241,8 @@
     "enableProxy": "تفعيل وكيل النظام",
     "proxyAddress": "عنوان الوكيل",
     "proxyHint": "يدعم http(s)/socks5، مثال: {example}. يعمل فقط عند تفعيل وكيل النظام.",
+    "proxyBypass": "تجاوز الوكيل لـ",
+    "proxyBypassHint": "افصل بين الإدخالات بفاصلة إنجليزية <code>,</code> دون مسافات، مثل <code>{example}</code>. يطابق <code>example.com</code> النطاق نفسه، ويطابق <code>.example.com</code> جميع نطاقاته الفرعية، ويمكن أيضًا إدخال عناوين IP. العناوين المحلية <code>localhost,127.0.0.1,::1</code> تتصل مباشرةً دائمًا ولا حاجة إلى إضافتها. تُطبَّق القائمة بوصفها متغير البيئة NO_PROXY.",
     "save": "حفظ",
     "saving": "جارٍ الحفظ...",
     "proxyRequired": "عنوان URL للوكيل مطلوب عند تفعيل الوكيل",
@@ -300,6 +302,8 @@
     "rollbackSuccess": "تم التراجع إلى الإصدار السابق. جارٍ إعادة التحميل...",
     "rollbackFailed": "فشل التراجع. تحقّق من سجلات الخادم.",
     "updateErrors": {
+      "permissionDenied": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها. حدّث يدويًا بصلاحيات المسؤول أو تحقّق من أذونات التثبيت.",
+      "targetWriteFailed": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها: {reason}",
       "sourceUnavailable": "تعذر الوصول إلى مصدر التحديث. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "network": "فشل اتصال الشبكة. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "downloadFailed": "فشل تنزيل حزمة التحديث. يرجى المحاولة مرة أخرى لاحقًا.",
@@ -3006,8 +3010,6 @@
           "openAgentsSettings": "فتح إعدادات الوكلاء",
           "retry": "إعادة المحاولة"
         },
-        "agentsSetupHint": "افتح الإعدادات > الوكلاء لإدارة التثبيت.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "تعذر قراءة إعدادات الوكيل الحالية.",
           "disabled": "{agent} معطّل في إعدادات الوكلاء. قم بتمكينه قبل الاتصال.",
@@ -3032,15 +3034,18 @@
           "turnFailedAuthRequired": "يحتاج {agent} إلى تسجيل دخولك من جديد قبل تنفيذ هذه الجولة. سجّل الدخول من الإعدادات ثم أعد إرسال الرسالة.",
           "agentAuthRequired": "تعذّر على {agent} بدء جلسة: لا توجد بيانات اعتماد صالحة للاستخدام. سجّل الدخول من جديد عبر الإعدادات ← الوكلاء ← {agent}، ثم أعد فتح هذه المحادثة.",
           "grokModelSwitchIncompatibleAgent": "لا يمكن لـ {agent} التبديل إلى هذا النموذج في محادثة قائمة. ابدأ جلسة جديدة لاستخدامه.",
+          "setModeFailed": "تعذّر على {agent} تبديل الوضع.",
+          "setConfigOptionFailed": "تعذّر على {agent} تطبيق هذا الإعداد.",
+          "goalControlFailed": "تعذّر على {agent} تحديث الهدف.",
+          "imageDropped": "لم تصل إحدى الصور المرفقة إلى {agent}.",
+          "sessionLoadFallback": "تعذّر على {agent} استعادة الجلسة السابقة فبدأ جلسة جديدة، ولم يعد السياق السابق متاحًا.",
           "turnFailedEmpty": "أنهى {agent} الجولة دون إنتاج أي رد.",
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على codeg تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
-          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
-          "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل."
+          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",
         "toolFallbackTitle": "أداة",
-        "eventErrorTitle": "خطأ الوكيل",
         "notificationTurnComplete": "{agent} أنهى الاستجابة",
         "notificationError": "{agent} خطأ: {message}",
         "notificationQuestion": "{agent} ينتظر إجابتك",
@@ -3057,7 +3062,8 @@
           "lineNoErrorWithDelay": "{retry}، {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}"
+        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}",
+        "noticeTitle": "{agent}: {title}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3783,7 +3789,6 @@
         "reconnecting": "جارٍ إعادة الاتصال…",
         "reconnectDisabledDuringTurn": "متاح بعد انتهاء الدور الحالي",
         "dismiss": "تجاهل",
-        "reconnectFailed": "فشل في إعادة الاتصال بالجلسة",
         "applied": "تم تطبيق الإعدادات الجديدة"
       },
       "piProjectTrust": {
@@ -4221,7 +4226,7 @@
     "agentTypeRequired": "نوع الوكيل مطلوب.",
     "agentTypeImmutableHint": "لا يمكن تغيير نوع الوكيل بعد الإنشاء.",
     "model": "النموذج",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "النموذج الرئيسي",
     "claudeReasoningModel": "نموذج الاستدلال (التفكير)",
@@ -6265,6 +6270,7 @@
       "ownedWindow": "تُعرض هذه الصفحة في نافذة مستقلة.",
       "ownedWindowShow": "إظهار النافذة",
       "remoteBanner": "فُتح عبر {host}",
+      "remoteBannerDown": "انقطع الاتصال بـ {host}. ستتم إعادة المحاولة مع الطلب التالي.",
       "navigationBlocked": "تم حظر الانتقال: {host}",
       "navigationBlockedRule": "محظور بقاعدة موقع",
       "navigationBlockedScheme": "لا يمكن فتح هذا النوع من العناوين هنا",
@@ -6278,7 +6284,17 @@
       "agentGrantLost": "انتهت المشاركة: غادرت الصفحة {origin}",
       "agentGrantLostShare": "شارك {origin} أيضًا",
       "agentGrantReplaced": "انتهت المشاركة: يخدم برنامج آخر {origin} الآن",
-      "agentGrantReplacedShare": "شارك على أي حال"
+      "agentGrantReplacedShare": "شارك على أي حال",
+      "errorRemoteRefused": "لا شيء يستمع على هذا العنوان في المضيف البعيد",
+      "errorRemoteRefusedHint": "رفض {host} الاتصال. تحقّق من أن الخادم الموجود خلف هذا العنوان يعمل هناك.",
+      "errorRemoteUnreachable": "لا يستطيع المضيف البعيد الوصول إلى هذا العنوان",
+      "errorRemoteUnreachableHint": "من جهة {host}، لا يمكن تحليل الاسم أو لا يوجد مسار إليه.",
+      "errorRemoteNotAllowed": "لا يفتح الخادم البعيد هذا العنوان للمتصفح",
+      "errorRemoteNotAllowedHint": "يسمح codeg-server على {host} لنفق المتصفح بالوصول إلى العناوين الخاصة فقط (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "استغرق المضيف البعيد وقتًا طويلًا للاتصال",
+      "errorRemoteTimeoutHint": "لم يتلقَّ {host} ردًا من هذا العنوان في الوقت المحدد. قد يكون الخادم هناك مشغولًا أو خلف جدار حماية.",
+      "errorTunnelDown": "الاتصال بالمضيف البعيد مقطوع",
+      "errorTunnelDownHint": "النفق إلى {host} لا ينقل أي شيء حاليًا. أعد المحاولة عندما يصبح متاحًا مرة أخرى."
     },
     "tab": {
       "untitled": "علامة تبويب جديدة"
@@ -6300,6 +6316,20 @@
       "unreachableHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليه. انشر هذا المنفذ (راجع CODEG_BRIDGE_PORTS) أو اضبط CODEG_BRIDGE_PUBLIC_HOST؛ وإذا كان codeg يُقدَّم عبر HTTPS فإن منافذ الجسر تحتاج إلى HTTPS أيضًا.",
       "unreachableHostHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليها. يجب أن يُترجَم اسم المضيف هذا إلى خادم codeg وأن يمر عبر الوكيل الموجود أمامه: سجل DNS بحرف بدل ومضيف افتراضي بحرف بدل (راجع CODEG_BRIDGE_HOST_PATTERN).",
       "errorTitle": "لا يمكن عرض هذه الصفحة هنا"
+    },
+    "remote": {
+      "title": "هذا العنوان على {host}",
+      "titleUnnamed": "هذا العنوان على المضيف البعيد",
+      "description": "يشير إلى الجهاز الذي تعمل عليه مساحة العمل هذه، لا إلى هذا الكمبيوتر.",
+      "copyAddress": "نسخ العنوان",
+      "copied": "تم نسخ العنوان",
+      "tryHost": "تجربة {host}",
+      "tryHostHint": "يفتح {address} في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كانت الصفحة هناك تستمع على جميع واجهات الشبكة وكان هذا الجهاز يصل إلى منفذها.",
+      "openHere": "فتح على هذا الجهاز",
+      "openHereHint": "يفتح العنوان في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كان هذا الجهاز على الشبكة نفسها.",
+      "retry": "إعادة المحاولة",
+      "connecting": "جارٍ الاتصال عبر {host}…",
+      "connectingUnnamed": "جارٍ الاتصال عبر المضيف البعيد…"
     },
     "download": {
       "started": "جارٍ التنزيل…",
@@ -6356,6 +6386,7 @@
       "shareControl": "قراءة وتنفيذ إجراءات",
       "levelDefault": "افتراضي",
       "notShareable": "لا يوجد عنوان ويب في هذه الصفحة لمشاركته مع الوكلاء",
+      "remoteWindow": "يعمل وكلاء مساحة العمل البعيدة على مضيفها ولا يمكنهم استخدام متصفح هذا الجهاز",
       "shared": "تمت المشاركة",
       "sharedControl": "مشاركة · يمكنه التصرف",
       "sharedWith": "يمكن للوكلاء قراءة {origin}",
@@ -6449,6 +6480,7 @@
       "noConversation": "افتح محادثة لإرسال هذه الصفحة إليها",
       "pickElement": "اختر عنصرًا…",
       "screenshot": "أرسل لقطة شاشة",
+      "markUp": "علّم على لقطة شاشة…",
       "consoleErrors": "أرسل أخطاء وحدة التحكم",
       "consoleClean": "لم يحدث خطأ في هذه الصفحة",
       "picking": "جارٍ الاختيار…",
@@ -6459,9 +6491,20 @@
       "noConsoleErrors": "لم تطبع هذه الصفحة أي أخطاء",
       "chipElement": "عنصر من الصفحة",
       "chipScreenshot": "لقطة من الصفحة",
+      "chipMarkedScreenshot": "لقطة شاشة عليها علامات",
       "chipConsole": "{count, plural, zero {لا أخطاء في وحدة التحكم} one {خطأ واحد في وحدة التحكم} two {خطآن في وحدة التحكم} few {# أخطاء في وحدة التحكم} many {# خطأ في وحدة التحكم} other {# خطأ في وحدة التحكم}}",
       "gone": "تلك المحادثة لم تعد مفتوحة",
-      "consoleErrorsCount": "{count, plural, zero {لا أخطاء لإرسالها} one {أرسل خطأ وحدة التحكم} two {أرسل خطأي وحدة التحكم} few {أرسل # أخطاء في وحدة التحكم} many {أرسل # خطأ في وحدة التحكم} other {أرسل # خطأ في وحدة التحكم}}"
+      "consoleErrorsCount": "{count, plural, zero {لا أخطاء لإرسالها} one {أرسل خطأ وحدة التحكم} two {أرسل خطأي وحدة التحكم} few {أرسل # أخطاء في وحدة التحكم} many {أرسل # خطأ في وحدة التحكم} other {أرسل # خطأ في وحدة التحكم}}",
+      "markupTitle": "التعليم على لقطة الشاشة",
+      "markupTools": "أداة الرسم",
+      "markupBox": "مربع",
+      "markupArrow": "سهم",
+      "markupUndo": "تراجع",
+      "markupClear": "مسح",
+      "markupHint": "اسحب على الصورة لترسم. تحمل كل علامة رقمًا يمكن لرسالتك أن تشير إليه.",
+      "markupCount": "{count, plural, zero {لا علامات} one {علامة واحدة} two {علامتان} few {# علامات} many {# علامة} other {# علامة}}",
+      "markupCancel": "إلغاء",
+      "markupSend": "أضف إلى المحادثة"
     }
   },
   "browser": {
@@ -6473,6 +6516,16 @@
     "inspector": {
       "error": {
         "switchedOff": "فُتحت هذه العلامة ومفتّش الويب مُعطّل. فعّله من إعدادات المتصفح ثم افتح الصفحة من جديد."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "يتطلب فتح عناوين المضيف البعيد في المتصفح المدمج نظام macOS 14 أو أحدث.",
+        "unsupported": "خادم codeg-server البعيد قديم جدًا ولا يمكنه نقل حركة المتصفح. حدّثه لفتح عناوينه هنا.",
+        "disabled": "نفق المتصفح معطّل على خادم codeg-server البعيد (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "تعذّر الوصول إلى نفق المتصفح في خادم codeg-server البعيد ({reason}).",
+        "bypassed": "يرسل محرك المتصفح في هذا الكمبيوتر بعض العناوين خارج النفق، لذا تبقى صفحات المضيف البعيد مغلقة بدل تحميلها من هذا الكمبيوتر.",
+        "probeFailed": "تعذّر على المتصفح المدمج التأكد من أنه يصل إلى المضيف البعيد عبر النفق. حاول مرة أخرى بعد قليل."
       }
     }
   }

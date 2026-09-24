@@ -22,10 +22,7 @@
 //   5. placement — the file column when it is on screen, else the transcript's
 //      own viewer drawer (full-page routes), else the column anyway.
 
-import {
-  isLoopbackHost,
-  isLoopbackOrPrivateHost,
-} from "@/lib/browser/browser-url"
+import { isLoopbackHost, isRemoteHostName } from "@/lib/browser/browser-url"
 import type {
   BrowserPrefsSnapshot,
   LinkSource,
@@ -46,6 +43,10 @@ export interface LinkSurface {
   viewerHostAvailable: boolean
   /** The window is bound to a remote codeg-server (`isRemoteDesktopMode()`). */
   remoteDesktop: boolean
+  /** That server's own host name — reached directly by this computer, so an
+   *  address on it is not one of the remote host's private ones (see
+   *  `isRemoteHostName`). */
+  remoteServerHost?: string | null
   /** Web mode, and the codeg-server bridges its loopback ports so a dev
    *  server there can be shown in a tab (`bridgeStatus().enabled`). */
   bridgeAvailable?: boolean
@@ -84,6 +85,10 @@ export type LinkAction =
        *  loopback or private and only reachable from the codeg host (a
        *  remote-workspace window, or a browser with the port bridge). */
       remoteOverride: boolean
+      /** The address lives on the remote codeg host of a remote-workspace
+       *  window: it opens in a remote tab (`BrowserTabSeed.remote`), never in
+       *  a profile of this computer. */
+      remote: boolean
     }
 
 function invert(target: LinkTarget): LinkTarget {
@@ -126,13 +131,14 @@ export function resolveLinkAction(
   if (
     surface.remoteDesktop &&
     surface.builtinAvailable &&
-    isLoopbackOrPrivateHost(hostname)
+    isRemoteHostName(hostname, surface.remoteServerHost ?? null)
   ) {
     return {
       kind: "builtin",
       url,
       placement: placementFor(surface),
       remoteOverride: true,
+      remote: true,
     }
   }
 
@@ -147,6 +153,7 @@ export function resolveLinkAction(
       url,
       placement: placementFor(surface),
       remoteOverride: true,
+      remote: false,
     }
   }
 
@@ -170,6 +177,7 @@ export function resolveLinkAction(
     url,
     placement: placementFor(surface),
     remoteOverride: false,
+    remote: false,
   }
 }
 

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod browser_bridge;
+pub mod browser_tunnel;
 pub mod compression;
 pub mod event_bridge;
 pub mod handlers;

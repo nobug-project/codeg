@@ -23,7 +23,7 @@ import {
   type BrowserEvalRequestPayload,
 } from "@/lib/browser/types"
 import { getCurrentWindowLabel } from "@/lib/browser/window-label"
-import { getTransport, isDesktop } from "@/lib/transport"
+import { getShellTransport, isDesktop } from "@/lib/transport"
 
 /**
  * The question `browser_eval` puts to a person: this code, on this site, once.
@@ -91,34 +91,37 @@ export function BrowserEvalConfirm() {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
     void (async () => {
-      const sub = await getTransport().subscribe<BrowserEvalRequestPayload>(
-        BROWSER_EVAL_REQUEST_EVENT,
-        (request) => {
-          // Broadcast to every window; shown by the one that owns the tab.
-          // The standing answer is applied AFTER this test, not before: every
-          // window would otherwise race to approve, and the backend would
-          // count whichever arrived first as the answer to a question its
-          // owner never saw.
-          if (request.ownerWindow !== getCurrentWindowLabel()) return
-          // Straight from storage, here, rather than from a rendered value or
-          // the cached snapshot. Both of those are updated by something that
-          // happens AFTER the person changed the setting — a commit and a
-          // passive effect for one, a delivered `storage` event for the
-          // other — and the lag is in the unsafe direction: somebody who has
-          // just asked to be shown each snippet would have the next one run
-          // without being asked. `localStorage` is written by the settings
-          // window before it notifies anyone.
-          if (readBrowserEvalApprovalNow() === "silent") {
-            answer(request.requestId, true)
-            return
+      // This app's own backend, as for every browser event (see
+      // `browser-api.ts`): the tabs an agent asks about are of this computer.
+      const sub =
+        await getShellTransport().subscribe<BrowserEvalRequestPayload>(
+          BROWSER_EVAL_REQUEST_EVENT,
+          (request) => {
+            // Broadcast to every window; shown by the one that owns the tab.
+            // The standing answer is applied AFTER this test, not before: every
+            // window would otherwise race to approve, and the backend would
+            // count whichever arrived first as the answer to a question its
+            // owner never saw.
+            if (request.ownerWindow !== getCurrentWindowLabel()) return
+            // Straight from storage, here, rather than from a rendered value or
+            // the cached snapshot. Both of those are updated by something that
+            // happens AFTER the person changed the setting — a commit and a
+            // passive effect for one, a delivered `storage` event for the
+            // other — and the lag is in the unsafe direction: somebody who has
+            // just asked to be shown each snippet would have the next one run
+            // without being asked. `localStorage` is written by the settings
+            // window before it notifies anyone.
+            if (readBrowserEvalApprovalNow() === "silent") {
+              answer(request.requestId, true)
+              return
+            }
+            setPending({
+              ...request,
+              lapsesAt: Math.max(Date.now(), request.expiresAt),
+            })
+            setAnswering(false)
           }
-          setPending({
-            ...request,
-            lapsesAt: Math.max(Date.now(), request.expiresAt),
-          })
-          setAnswering(false)
-        }
-      )
+        )
       if (cancelled) sub()
       else unsubscribe = sub
     })()

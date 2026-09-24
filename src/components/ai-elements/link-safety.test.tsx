@@ -25,6 +25,7 @@ const DESKTOP_WITHOUT_BROWSER = {
   profiles: false,
   signInUserAgent: false,
   ownedWindowControls: false,
+  remoteEgress: false,
   policy: { enabled: true, managedRules: [], managedSource: null },
 }
 
@@ -57,6 +58,7 @@ vi.mock("@/lib/transport", () => ({
   // A desktop window bound to a remote server — mirrors the real helper.
   isRemoteDesktopMode: () =>
     mocks.isDesktop() && mocks.getActiveRemoteConnectionId() !== null,
+  getServerBaseUrl: () => "https://dev.example.com",
 }))
 
 vi.mock("@/contexts/active-folder-context", () => ({

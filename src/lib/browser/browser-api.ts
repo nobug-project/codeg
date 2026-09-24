@@ -2,8 +2,13 @@
 // commands exist in the Tauri runtime alone, and `browserCapabilities()`
 // answers `{ available: false }` everywhere else so callers can branch on one
 // value instead of on the runtime.
+//
+// Always this app's own shell, never `getTransport()`: in a window bound to a
+// remote codeg-server that one talks to the remote host, which has no browser
+// at all — the built-in browser is a webview of THIS computer, whichever
+// server the window's workspace lives on.
 
-import { getTransport, isDesktop } from "@/lib/transport"
+import { getShellTransport, isDesktop } from "@/lib/transport"
 
 import type { HostRule } from "./host-rules"
 import type {
@@ -41,6 +46,7 @@ const UNAVAILABLE: BrowserCapabilities = {
   profiles: false,
   signInUserAgent: false,
   ownedWindowControls: false,
+  remoteEgress: false,
 }
 
 let capabilitiesPromise: Promise<BrowserCapabilities> | null = null
@@ -53,7 +59,7 @@ export function browserCapabilities(): Promise<BrowserCapabilities> {
     return Promise.resolve(UNAVAILABLE)
   }
   if (!capabilitiesPromise) {
-    capabilitiesPromise = getTransport()
+    capabilitiesPromise = getShellTransport()
       .call<BrowserCapabilities>("browser_capabilities", {})
       .then((caps) => {
         resolvedCapabilities = caps
@@ -86,7 +92,10 @@ export function browserCapabilitiesSnapshot(): BrowserCapabilities | null {
  */
 export function browserCapabilitiesNow(): Promise<BrowserCapabilities> {
   if (!isDesktop()) return Promise.resolve(UNAVAILABLE)
-  return getTransport().call<BrowserCapabilities>("browser_capabilities", {})
+  return getShellTransport().call<BrowserCapabilities>(
+    "browser_capabilities",
+    {}
+  )
 }
 
 /** Tests only. */
@@ -113,12 +122,16 @@ export interface OpenBrowserTabParams {
   devtools?: boolean
   /** The browser profile to open in (`default` when omitted). */
   profile?: string
+  /** A remote connection's id: the tab is one of the remote host's, opened in
+   *  that connection's own profile once its egress is ready (the profile
+   *  above is then ignored). Rejects with the reason when it cannot be. */
+  egress?: number | null
 }
 
 export function browserOpenTab(
   params: OpenBrowserTabParams
 ): Promise<BrowserTabState> {
-  return getTransport().call<BrowserTabState>("browser_open_tab", {
+  return getShellTransport().call<BrowserTabState>("browser_open_tab", {
     tabId: params.tabId,
     url: params.url,
     bounds: params.bounds,
@@ -127,6 +140,7 @@ export function browserOpenTab(
     folderId: params.folderId ?? null,
     devtools: params.devtools ?? false,
     profile: params.profile ?? "default",
+    egress: params.egress ?? null,
   })
 }
 
@@ -153,7 +167,7 @@ export interface DocGuestOpenResult {
 export function browserDocOpen(
   params: OpenDocGuestParams
 ): Promise<DocGuestOpenResult> {
-  return getTransport().call<DocGuestOpenResult>("browser_doc_open", {
+  return getShellTransport().call<DocGuestOpenResult>("browser_doc_open", {
     tabId: params.tabId,
     path: params.path,
     root: params.root,
@@ -169,20 +183,20 @@ export function browserDocSetMode(
   tabId: string,
   mode: DocMode
 ): Promise<DocGuestState> {
-  return getTransport().call<DocGuestState>("browser_doc_set_mode", {
+  return getShellTransport().call<DocGuestState>("browser_doc_set_mode", {
     tabId,
     mode,
   })
 }
 
 export function browserDocState(tabId: string): Promise<DocGuestState> {
-  return getTransport().call<DocGuestState>("browser_doc_state", { tabId })
+  return getShellTransport().call<DocGuestState>("browser_doc_state", { tabId })
 }
 
 /** `requestId` comes back on the `browser://closed` this produces, so the
  *  caller can tell it from a close of the same tab it did not ask for. */
 export function browserClose(tabId: string, requestId?: string): Promise<void> {
-  return getTransport().call<void>("browser_close", { tabId, requestId })
+  return getShellTransport().call<void>("browser_close", { tabId, requestId })
 }
 
 /**
@@ -196,11 +210,11 @@ export function browserClose(tabId: string, requestId?: string): Promise<void> {
  * error carries `browser.inspector.error.switchedOff`.
  */
 export function browserOpenDevtools(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_open_devtools", { tabId })
+  return getShellTransport().call<void>("browser_open_devtools", { tabId })
 }
 
 export function browserSetBounds(tabId: string, bounds: Bounds): Promise<void> {
-  return getTransport().call<void>("browser_set_bounds", { tabId, bounds })
+  return getShellTransport().call<void>("browser_set_bounds", { tabId, bounds })
 }
 
 /**
@@ -214,7 +228,7 @@ export function browserSetVisible(
   handoffFocus = false,
   freeze = false
 ): Promise<FrozenFrame | null> {
-  return getTransport()
+  return getShellTransport()
     .call<FrozenFrame | null | undefined>("browser_set_visible", {
       tabId,
       visible,
@@ -234,14 +248,14 @@ export function browserSetVisible(
  * capture that did not come back in time.
  */
 export function browserFreezeFrame(tabId: string): Promise<FrozenFrame | null> {
-  return getTransport()
+  return getShellTransport()
     .call<FrozenFrame | null | undefined>("browser_freeze_frame", { tabId })
     .then((frame) => frame ?? null)
 }
 
 /** The user's site rules, for the backend to enforce `block` on navigations. */
 export function browserSetHostRules(rules: readonly HostRule[]): Promise<void> {
-  return getTransport().call<void>("browser_set_host_rules", {
+  return getShellTransport().call<void>("browser_set_host_rules", {
     rules: rules.map((rule) => ({
       pattern: rule.pattern,
       action: rule.action,
@@ -253,34 +267,36 @@ export function browserNavigate(
   tabId: string,
   url: string
 ): Promise<BrowserTabState> {
-  return getTransport().call<BrowserTabState>("browser_navigate", {
+  return getShellTransport().call<BrowserTabState>("browser_navigate", {
     tabId,
     url,
   })
 }
 
 export function browserReload(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_reload", { tabId })
+  return getShellTransport().call<void>("browser_reload", { tabId })
 }
 
 export function browserStop(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_stop", { tabId })
+  return getShellTransport().call<void>("browser_stop", { tabId })
 }
 
 export function browserGoBack(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_go_back", { tabId })
+  return getShellTransport().call<void>("browser_go_back", { tabId })
 }
 
 export function browserGoForward(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_go_forward", { tabId })
+  return getShellTransport().call<void>("browser_go_forward", { tabId })
 }
 
 export function browserGetState(tabId: string): Promise<BrowserTabState> {
-  return getTransport().call<BrowserTabState>("browser_get_state", { tabId })
+  return getShellTransport().call<BrowserTabState>("browser_get_state", {
+    tabId,
+  })
 }
 
 export function browserListTabs(): Promise<BrowserTabState[]> {
-  return getTransport().call<BrowserTabState[]>("browser_list_tabs", {})
+  return getShellTransport().call<BrowserTabState[]>("browser_list_tabs", {})
 }
 
 /** The local servers this window has seen start and that still answer.
@@ -290,7 +306,10 @@ export function browserListTabs(): Promise<BrowserTabState[]> {
  *  opened. Empty off the desktop, where the command does not exist. */
 export function browserListServices(): Promise<DetectedService[]> {
   if (!isDesktop()) return Promise.resolve([])
-  return getTransport().call<DetectedService[]>("browser_list_services", {})
+  return getShellTransport().call<DetectedService[]>(
+    "browser_list_services",
+    {}
+  )
 }
 
 /** Share this tab with agents at `level`, or take it back with `"none"`.
@@ -303,7 +322,7 @@ export function browserAgentGrant(
   tabId: string,
   level: GrantLevel
 ): Promise<BrowserTabState> {
-  return getTransport().call<BrowserTabState>("browser_agent_grant", {
+  return getShellTransport().call<BrowserTabState>("browser_agent_grant", {
     tabId,
     level,
   })
@@ -316,7 +335,7 @@ export function browserAgentSnapshot(
   tabId: string,
   maxChars?: number
 ): Promise<PageSnapshot> {
-  return getTransport().call<PageSnapshot>("browser_agent_snapshot", {
+  return getShellTransport().call<PageSnapshot>("browser_agent_snapshot", {
     tabId,
     maxChars: maxChars ?? null,
   })
@@ -330,7 +349,7 @@ export function browserAgentAct(
   tabId: string,
   request: ActionRequest
 ): Promise<ActionOutcome> {
-  return getTransport().call<ActionOutcome>("browser_agent_act", {
+  return getShellTransport().call<ActionOutcome>("browser_agent_act", {
     tabId,
     request,
   })
@@ -342,7 +361,7 @@ export function browserAgentConsole(
   tabId: string,
   query: ConsoleQuery = {}
 ): Promise<ConsoleReadout> {
-  return getTransport().call<ConsoleReadout>("browser_agent_console", {
+  return getShellTransport().call<ConsoleReadout>("browser_agent_console", {
     tabId,
     query,
   })
@@ -355,7 +374,7 @@ export function browserAgentCapture(
   tabId: string,
   request: CaptureRequest = {}
 ): Promise<CaptureOutcome> {
-  return getTransport().call<CaptureOutcome>("browser_agent_capture", {
+  return getShellTransport().call<CaptureOutcome>("browser_agent_capture", {
     tabId,
     request,
   })
@@ -370,7 +389,7 @@ export function browserEvalDecide(
   requestId: string,
   allow: boolean
 ): Promise<boolean> {
-  return getTransport().call<boolean>("browser_eval_decide", {
+  return getShellTransport().call<boolean>("browser_eval_decide", {
     requestId,
     allow,
   })
@@ -387,7 +406,7 @@ export function browserAnswerOpenRequest(
   requestId: string,
   tabId: string | null
 ): Promise<boolean> {
-  return getTransport().call<boolean>("browser_answer_open_request", {
+  return getShellTransport().call<boolean>("browser_answer_open_request", {
     requestId,
     tabId,
   })
@@ -398,17 +417,21 @@ export function browserAnswerOpenRequest(
  *  press Escape, start another pick, navigate, or leave it armed too long —
  *  none of which is an error. */
 export function browserPickElement(tabId: string): Promise<PageHandoff> {
-  return getTransport().call<PageHandoff>("browser_pick_element", { tabId })
+  return getShellTransport().call<PageHandoff>("browser_pick_element", {
+    tabId,
+  })
 }
 
 /** Take the picker's highlight down without picking anything. */
 export function browserPickCancel(tabId: string): Promise<void> {
-  return getTransport().call<void>("browser_pick_cancel", { tabId })
+  return getShellTransport().call<void>("browser_pick_cancel", { tabId })
 }
 
 /** A screenshot of the page as it is on screen, for a conversation. */
 export function browserPageCapture(tabId: string): Promise<PageHandoff> {
-  return getTransport().call<PageHandoff>("browser_page_capture", { tabId })
+  return getShellTransport().call<PageHandoff>("browser_page_capture", {
+    tabId,
+  })
 }
 
 /** What the page has printed, for a conversation. Not the agent's read: no
@@ -417,7 +440,7 @@ export function browserPageConsole(
   tabId: string,
   errorsOnly = true
 ): Promise<PageHandoff> {
-  return getTransport().call<PageHandoff>("browser_page_console", {
+  return getShellTransport().call<PageHandoff>("browser_page_console", {
     tabId,
     errorsOnly,
   })
@@ -425,19 +448,19 @@ export function browserPageConsole(
 
 /** Wipe cookies, caches and storage shared by every tab of a profile. */
 export function browserClearData(profile = "default"): Promise<void> {
-  return getTransport().call<void>("browser_clear_data", { profile })
+  return getShellTransport().call<void>("browser_clear_data", { profile })
 }
 
 /** Delete a profile: its tabs are closed, then its store is removed. The
  *  default profile cannot be deleted. */
 export function browserRemoveProfile(profile: string): Promise<void> {
-  return getTransport().call<void>("browser_remove_profile", { profile })
+  return getShellTransport().call<void>("browser_remove_profile", { profile })
 }
 
 /** The "sign-in user agent" preference, for the backend to apply on
  *  navigations to Google's sign-in hosts. */
 export function browserSetSignInUserAgent(enabled: boolean): Promise<void> {
-  return getTransport().call<void>("browser_set_sign_in_user_agent", {
+  return getShellTransport().call<void>("browser_set_sign_in_user_agent", {
     enabled,
   })
 }
@@ -450,7 +473,7 @@ export function browserSetBlankPageTheme(theme: {
   background: string
   dark: boolean
 }): Promise<void> {
-  return getTransport().call<void>("browser_set_blank_page_theme", {
+  return getShellTransport().call<void>("browser_set_blank_page_theme", {
     background: theme.background,
     dark: theme.dark,
   })
@@ -465,7 +488,7 @@ export function browserFind(
   query: string,
   forward = true
 ): Promise<boolean> {
-  return getTransport().call<boolean>("browser_find", {
+  return getShellTransport().call<boolean>("browser_find", {
     tabId,
     query,
     forward,
@@ -474,16 +497,19 @@ export function browserFind(
 
 /** Downloads this run started, oldest first. */
 export function browserListDownloads(): Promise<BrowserDownload[]> {
-  return getTransport().call<BrowserDownload[]>("browser_list_downloads", {})
+  return getShellTransport().call<BrowserDownload[]>(
+    "browser_list_downloads",
+    {}
+  )
 }
 
 /** Show a finished download in the file manager. The backend reveals the path
  *  it recorded for that download, so this cannot point anywhere else. */
 export function browserRevealDownload(id: string): Promise<void> {
-  return getTransport().call<void>("browser_reveal_download", { id })
+  return getShellTransport().call<void>("browser_reveal_download", { id })
 }
 
 /** Forget the records; the downloaded files stay where they are. */
 export function browserClearDownloads(): Promise<void> {
-  return getTransport().call<void>("browser_clear_downloads", {})
+  return getShellTransport().call<void>("browser_clear_downloads", {})
 }

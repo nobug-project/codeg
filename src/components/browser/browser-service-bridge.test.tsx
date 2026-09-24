@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
         url,
         placement: "tab",
         remoteOverride: false,
+        remote: false,
       })
     ),
     windowLabel: "main",
@@ -116,6 +117,7 @@ describe("BrowserServiceBridge", () => {
         kind: "builtin",
         url,
         remoteOverride: false,
+        remote: false,
         placement: "tab",
       })
     )
@@ -156,6 +158,27 @@ describe("BrowserServiceBridge", () => {
       { activate: "tab" }
     )
     expect(mocks.toast).not.toHaveBeenCalled()
+  })
+
+  // An address the decision put on the remote host stays there when the
+  // page is opened on its own, as it does when a person clicks it.
+  it("opens a server of the remote host as a remote tab", async () => {
+    setBrowserServiceAutoOpen("open")
+    mocks.decide.mockImplementation(
+      (url: string): LinkAction => ({
+        kind: "builtin",
+        url,
+        placement: "tab",
+        remoteOverride: true,
+        remote: true,
+      })
+    )
+    await mount()
+    detect()
+    expect(mocks.openBrowserTab).toHaveBeenCalledWith(
+      "http://localhost:5173/",
+      { activate: "tab", remote: true }
+    )
   })
 
   it("does nothing at all when switched off", async () => {

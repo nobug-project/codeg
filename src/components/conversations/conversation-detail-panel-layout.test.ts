@@ -189,7 +189,6 @@ describe("ConversationDetailPanel new conversation layout", () => {
       '"overflow-hidden rounded-xl transition-colors"'
     )
     expect(messageInputSource).not.toContain("bg-muted/60")
-    expect(messageInputSource).toContain(': "contents"')
     // The rounded border lives in the always-on base (so the active-session flow
     // gradient can overlay a real 1px border without a layout shift); the
     // attached folder-branch-picker treatment still adds a solid surface

@@ -25,6 +25,15 @@ export type BrowserErrorKind =
   | "blocked"
   | "failed"
   | "popup-denied"
+  // A remote tab's page, as the tunnel to the remote host saw it fail (see
+  // `browser::remote`): nothing listens on that port there, the remote host
+  // cannot reach the address, its server's policy keeps the tunnel off it,
+  // it took too long — or the tunnel itself is down.
+  | "remote-refused"
+  | "remote-unreachable"
+  | "remote-not-allowed"
+  | "remote-timeout"
+  | "tunnel-down"
 
 export interface BrowserErrorInfo {
   kind: BrowserErrorKind
@@ -341,6 +350,21 @@ export interface BrowserCapabilities {
    *  snapshots, and its page still talks to the host — true where the owned
    *  window is the surface the platform shim is written for (Linux). */
   ownedWindowControls: boolean
+  /** A remote-workspace window's tabs can reach the remote host through its
+   *  codeg-server: a profile of their own to proxy (macOS 14+), and on macOS
+   *  the embedded surface. Whether a given remote server carries the traffic
+   *  is only known when a tab asks. */
+  remoteEgress: boolean
+}
+
+/** Where a remote connection's egress stands (`browser://egress`). */
+export type BrowserEgressStatus =
+  | { state: "idle" | "connecting" | "ready" | "unsupported" | "disabled" }
+  | { state: "down"; reason: string }
+
+export interface BrowserEgressPayload {
+  connectionId: number
+  status: BrowserEgressStatus
 }
 
 /** How a document guest serves its file: as a picture of itself (no script,
@@ -506,6 +530,8 @@ export const BROWSER_CONSOLE_ERRORS_EVENT = "browser://console-errors"
 export const BROWSER_EVAL_REQUEST_EVENT = "browser://eval-request"
 /** A tab's web inspector is gone; see `BrowserDevtoolsClosedPayload`. */
 export const BROWSER_DEVTOOLS_CLOSED_EVENT = "browser://devtools-closed"
+/** A remote connection's egress changed; see `BrowserEgressPayload`. */
+export const BROWSER_EGRESS_EVENT = "browser://egress"
 
 /** `browser://eval-request`: one `browser_eval` snippet, waiting on a person.
  *

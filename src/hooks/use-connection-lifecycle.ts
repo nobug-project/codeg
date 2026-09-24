@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { toast } from "sonner"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useTaskContext } from "@/contexts/task-context"
 import { useConnection, type UseConnectionReturn } from "@/hooks/use-connection"
 import { extractAppCommandError } from "@/lib/app-error"
+import { notify } from "@/lib/notify"
 import { isConnectionBusy } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
 import { type AgentType, type PromptDraft } from "@/lib/types"
@@ -485,7 +485,11 @@ export function useConnectionLifecycle({
         const message =
           appError?.message ??
           (e instanceof Error ? e.message : String(e ?? "unknown error"))
-        toast.error(t("errors.sendPromptFailed", { error: message }))
+        notify({
+          level: "error",
+          key: `send-failed:${contextKey}`,
+          title: t("errors.sendPromptFailed", { error: message }),
+        })
         // Let the caller settle its optimistic state (roll back the phantom
         // user turn, drop out of awaiting_persist so the queue keeps
         // flushing). Runs after the toast so the state rollback can't hide

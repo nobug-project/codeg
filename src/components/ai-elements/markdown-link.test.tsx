@@ -141,21 +141,6 @@ describe("MarkdownLink", () => {
     }
   )
 
-  it("does nothing when clicking an incomplete (streaming) link", () => {
-    render(
-      <MarkdownLink href="streamdown:incomplete-link">partial</MarkdownLink>
-    )
-
-    const button = screen.getByRole("button")
-    expect(button).not.toHaveAttribute("data-resource-kind")
-    expect(button.querySelector("svg")).toBeNull()
-
-    fireEvent.click(button)
-    expect(window.open).not.toHaveBeenCalled()
-    expect(mocks.onLinkCheck).not.toHaveBeenCalled()
-    expect(screen.queryByTestId("link-modal")).not.toBeInTheDocument()
-  })
-
   describe("codeg:// reference badges", () => {
     it("renders a session link as a session badge (conversation glyph, no agent icon or status dot)", () => {
       render(

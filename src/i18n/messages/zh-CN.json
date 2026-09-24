@@ -241,6 +241,8 @@
     "enableProxy": "启用系统代理",
     "proxyAddress": "代理地址",
     "proxyHint": "支持 http(s)/socks5，示例：{example}。仅在启用系统代理时生效。",
+    "proxyBypass": "不走代理的地址",
+    "proxyBypassHint": "多个地址用英文逗号 <code>,</code> 分隔，不加空格，例如 <code>{example}</code>。<code>example.com</code> 匹配该域名，<code>.example.com</code> 匹配它的所有子域名，也可以填写 IP 地址。本机地址 <code>localhost,127.0.0.1,::1</code> 始终直连，无需填写。该列表作为环境变量 NO_PROXY 生效。",
     "save": "保存",
     "saving": "保存中...",
     "proxyRequired": "启用代理时必须填写代理地址",
@@ -300,6 +302,8 @@
     "rollbackSuccess": "已回滚到上一个版本，正在重新加载……",
     "rollbackFailed": "回滚失败，请检查服务器日志。",
     "updateErrors": {
+      "permissionDenied": "无法写入 {path}，因此无法就地安装更新。请以管理员权限手动更新，或检查安装目录权限。",
+      "targetWriteFailed": "无法写入 {path}，因此无法就地安装更新：{reason}",
       "sourceUnavailable": "无法连接更新源，请检查网络或代理设置后重试。",
       "network": "网络连接异常，请检查网络或代理设置后重试。",
       "downloadFailed": "下载更新包失败，请稍后重试。",
@@ -3006,8 +3010,6 @@
           "openAgentsSettings": "打开 Agents 管理",
           "retry": "重试"
         },
-        "agentsSetupHint": "点击前往设置 > Agents 管理安装。",
-        "withSetupHint": "{message}\n提示：{hint}",
         "blocked": {
           "missingConfig": "无法读取当前 Agent 配置。",
           "disabled": "{agent} 已在 Agents 管理中禁用，请先启用后再连接。",
@@ -3032,15 +3034,18 @@
           "turnFailedAuthRequired": "{agent} 需要你重新登录后才能执行本轮回复。请在设置中登录，然后重新发送这条消息。",
           "agentAuthRequired": "{agent} 无法建立会话：没有可用的登录凭据。请在 设置 → 智能体 → {agent} 中重新登录，然后重新打开该会话。",
           "grokModelSwitchIncompatibleAgent": "{agent} 无法在已有对话中切换到该模型，请新建会话以使用它。",
+          "setModeFailed": "{agent} 切换模式失败。",
+          "setConfigOptionFailed": "{agent} 未能应用该设置。",
+          "goalControlFailed": "{agent} 未能更新目标。",
+          "imageDropped": "{agent} 没有收到一张附带的图片。",
+          "sessionLoadFallback": "{agent} 无法恢复之前的会话，已改为开始新会话，之前的上下文不再可用。",
           "turnFailedEmpty": "{agent} 本轮没有产生任何回复就结束了。",
           "turnFailedEmptyProtocol": "{agent} 本轮的输出 codeg 无法解析，可能是代理版本与协议不匹配。",
-          "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。",
-          "detailsInAlerts": "在状态栏的「告警」中展开详情，可查看代理输出。"
+          "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。"
         },
         "unableReadAgentConfig": "无法读取 Agent 配置：{message}",
         "connectFailedTitle": "{agent} 连接失败",
         "toolFallbackTitle": "工具",
-        "eventErrorTitle": "Agent 错误",
         "notificationTurnComplete": "{agent} 已完成响应",
         "notificationError": "{agent} 错误：{message}",
         "notificationQuestion": "{agent} 正在等你回答",
@@ -3057,7 +3062,8 @@
           "lineNoErrorWithDelay": "{retry}，{delay}",
           "httpStatus": "（HTTP {status}）"
         },
-        "configOptionAdjusted": "{agent} 把{option}设成了 {actual}，而不是 {requested}"
+        "configOptionAdjusted": "{agent} 把{option}设成了 {actual}，而不是 {requested}",
+        "noticeTitle": "{agent}：{title}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3783,7 +3789,6 @@
         "reconnecting": "正在重连…",
         "reconnectDisabledDuringTurn": "当前回合结束后可重连",
         "dismiss": "忽略",
-        "reconnectFailed": "重连会话失败",
         "applied": "新配置已应用"
       },
       "piProjectTrust": {
@@ -4240,7 +4245,7 @@
     "agentTypeRequired": "请选择智能体类型。",
     "agentTypeImmutableHint": "智能体类型创建后不可修改。",
     "model": "模型",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "主模型",
     "claudeReasoningModel": "推理模型（思考）",
@@ -6265,6 +6270,7 @@
       "ownedWindow": "该页面显示在独立窗口中。",
       "ownedWindowShow": "显示窗口",
       "remoteBanner": "经由 {host} 打开",
+      "remoteBannerDown": "与 {host} 的连接已断开，下一次请求时会重新连接。",
       "navigationBlocked": "已阻止跳转：{host}",
       "navigationBlockedRule": "被站点规则阻止",
       "navigationBlockedScheme": "此类地址不能在这里打开",
@@ -6278,7 +6284,17 @@
       "agentGrantLost": "共享已结束：页面离开了 {origin}",
       "agentGrantLostShare": "也共享 {origin}",
       "agentGrantReplaced": "共享已结束：现在是另一个程序在 {origin} 上提供服务",
-      "agentGrantReplacedShare": "仍然共享"
+      "agentGrantReplacedShare": "仍然共享",
+      "errorRemoteRefused": "远端主机上没有程序在监听这个地址",
+      "errorRemoteRefusedHint": "{host} 拒绝了连接。请确认这个地址背后的服务在那台机器上正在运行。",
+      "errorRemoteUnreachable": "远端主机无法访问这个地址",
+      "errorRemoteUnreachableHint": "从 {host} 看，这个名字无法解析，或者没有到达它的路由。",
+      "errorRemoteNotAllowed": "远端服务器不允许浏览器访问这个地址",
+      "errorRemoteNotAllowedHint": "{host} 上的 codeg-server 只允许浏览器隧道访问私网地址（CODEG_BROWSER_TUNNEL=private）。",
+      "errorRemoteTimeout": "远端主机连接超时",
+      "errorRemoteTimeoutHint": "{host} 没有在限定时间内得到这个地址的响应。那边的服务可能很忙，或被防火墙挡住了。",
+      "errorTunnelDown": "与远端主机的连接已断开",
+      "errorTunnelDownHint": "通往 {host} 的隧道目前无法传输。等它恢复可达后再重试。"
     },
     "tab": {
       "untitled": "新标签页"
@@ -6300,6 +6316,20 @@
       "unreachableHint": "codeg 服务器把这个页面放在 {origin}，但你的浏览器访问不到它。请开放该端口（见 CODEG_BRIDGE_PORTS）或设置 CODEG_BRIDGE_PUBLIC_HOST；如果 codeg 通过 HTTPS 提供服务，端口桥也需要 HTTPS。",
       "unreachableHostHint": "codeg 服务端把这个页面放在了 {origin}，但你的浏览器访问不到。这个主机名需要解析到 codeg 服务端，并且能穿过前面的反向代理——也就是一条泛域名 DNS 记录加一个泛域名虚拟主机（见 CODEG_BRIDGE_HOST_PATTERN）。",
       "errorTitle": "无法在这里显示此页面"
+    },
+    "remote": {
+      "title": "该地址在 {host} 上",
+      "titleUnnamed": "该地址在远端主机上",
+      "description": "它指向这个工作区所在的机器，而不是这台电脑。",
+      "copyAddress": "复制地址",
+      "copied": "已复制地址",
+      "tryHost": "尝试 {host}",
+      "tryHostHint": "在这台电脑的标签页中打开 {address}。前提是那边的页面监听了所有网络接口，并且这台电脑能访问该端口。",
+      "openHere": "在这台电脑上打开",
+      "openHereHint": "在这台电脑的标签页中打开该地址。前提是这台电脑也在同一个网络里。",
+      "retry": "重试",
+      "connecting": "正在经由 {host} 连接…",
+      "connectingUnnamed": "正在经由远端主机连接…"
     },
     "download": {
       "started": "正在下载…",
@@ -6356,6 +6386,7 @@
       "shareControl": "读取并操作权限",
       "levelDefault": "默认",
       "notShareable": "此页面没有可共享给智能体的网址",
+      "remoteWindow": "远程工作区的智能体运行在它的主机上，无法使用这台电脑的浏览器",
       "shared": "已共享",
       "sharedControl": "已共享 · 可操作",
       "sharedWith": "智能体可读取 {origin}",
@@ -6449,6 +6480,7 @@
       "noConversation": "先打开一个对话，才能把页面发过去",
       "pickElement": "选择一个元素…",
       "screenshot": "发送一张截图",
+      "markUp": "标注一张截图…",
       "consoleErrors": "发送控制台报错",
       "consoleClean": "这个页面没有出错",
       "picking": "选择中…",
@@ -6459,9 +6491,20 @@
       "noConsoleErrors": "这个页面没有打印过报错",
       "chipElement": "页面元素",
       "chipScreenshot": "页面截图",
+      "chipMarkedScreenshot": "带标注的截图",
       "chipConsole": "{count, plural, other {# 条控制台报错}}",
       "gone": "那个对话已经关掉了",
-      "consoleErrorsCount": "{count, plural, other {发送 # 条控制台报错}}"
+      "consoleErrorsCount": "{count, plural, other {发送 # 条控制台报错}}",
+      "markupTitle": "标注截图",
+      "markupTools": "绘制工具",
+      "markupBox": "方框",
+      "markupArrow": "箭头",
+      "markupUndo": "撤销",
+      "markupClear": "清除",
+      "markupHint": "在图上拖动来画。每个标注都带编号，消息里可以直接用编号指代。",
+      "markupCount": "{count, plural, other {# 个标注}}",
+      "markupCancel": "取消",
+      "markupSend": "加入对话"
     }
   },
   "browser": {
@@ -6473,6 +6516,16 @@
     "inspector": {
       "error": {
         "switchedOff": "这个标签页是在网页检查器关闭时打开的。请在浏览器设置里打开它，然后重新打开该页面。"
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "在内置浏览器中打开远端主机的地址需要 macOS 14 或更高版本。",
+        "unsupported": "远端的 codeg-server 版本过旧，无法转发浏览器流量。更新它之后才能在这里打开它的地址。",
+        "disabled": "远端的 codeg-server 关闭了浏览器隧道（CODEG_BROWSER_TUNNEL）。",
+        "unreachable": "无法连接远端 codeg-server 的浏览器隧道（{reason}）。",
+        "bypassed": "这台电脑的浏览器引擎会让部分地址绕过隧道，为避免从这台电脑加载，远端主机的页面不会打开。",
+        "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
   }

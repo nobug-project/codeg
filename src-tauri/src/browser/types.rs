@@ -57,6 +57,19 @@ pub enum BrowserErrorKind {
     Blocked,
     Failed,
     PopupDenied,
+    /// A remote tab's page (`browser::remote`): nothing listens on that port
+    /// on the remote host.
+    RemoteRefused,
+    /// A remote tab's page: the remote host cannot reach that address (no
+    /// route to it, or no such name there).
+    RemoteUnreachable,
+    /// A remote tab's page: the remote server's policy keeps its tunnel off
+    /// that address (`CODEG_BROWSER_TUNNEL=private`).
+    RemoteNotAllowed,
+    /// A remote tab's page: the remote host did not get through in time.
+    RemoteTimeout,
+    /// A remote tab's page: the tunnel to the remote host is down.
+    TunnelDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +165,11 @@ pub struct BrowserCapabilities {
     /// window is the surface the platform shim is written for (Linux); false
     /// where it is the fallback and the host does not hold its webview.
     pub owned_window_controls: bool,
+    /// A remote-workspace window's tabs can reach the remote host through
+    /// its codeg-server (`browser::remote`): a profile of their own to proxy
+    /// (macOS 14+), and on macOS the embedded surface. Whether a given remote
+    /// server carries the traffic is only known when a tab asks.
+    pub remote_egress: bool,
 }
 
 /// The last frame of a page, handed back by `browser_set_visible` when the
@@ -178,6 +196,13 @@ pub enum SurfaceChoice {
     Window,
 }
 
+/// How every block the built-in browser hands a conversation opens (the
+/// renderers in `handoff` start with it). In the shared module because blocks
+/// are recognized by it in both runtimes: a remote workspace's server projects
+/// the prompts a desktop's browser sent (`acp::types::project_user_prompt_block`),
+/// and the transcript names a badge from it (`src/lib/browser/page-handoff-block.ts`).
+pub const HANDOFF_BLOCK_HEADER: &str = "Captured from a web page in the built-in browser";
+
 pub const STATE_EVENT: &str = "browser://state";
 pub const CLOSED_EVENT: &str = "browser://closed";
 pub const POPUP_EVENT: &str = "browser://popup";
@@ -203,6 +228,20 @@ pub const DOC_STATE_EVENT: &str = "browser://doc-state";
 /// this into a stream. Both edges come from the ring itself, so the mark on
 /// the "send to chat" control cannot drift from what the tab actually holds.
 pub const CONSOLE_ERRORS_EVENT: &str = "browser://console-errors";
+
+/// Where a remote connection's egress stands (`browser::egress`), on every
+/// change: the tabs of its profile say whether they still reach the remote
+/// host. App-wide, like every `browser://` event; a window keeps the
+/// connection it is bound to.
+pub const EGRESS_EVENT: &str = "browser://egress";
+
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserEgressPayload {
+    pub connection_id: i32,
+    pub status: crate::browser::egress::EgressStatus,
+}
 
 /// A tab's web inspector is gone; put the page back where the host wants it.
 ///

@@ -50,15 +50,16 @@ export function hasTranscriptOverlay(agentType: string): boolean {
  *
  * - `tool_call_update` revises a call already on screen. A tool that settles
  *   just after its turn closed is the common case, and it is not new material.
- * - An empty `content_delta` is a no-op; an empty `thinking` only opens a
- *   placeholder block. Neither is anything a re-read could surface.
+ * - Empty or whitespace-only deltas carry no new readable content. Codex can
+ *   flush a final newline after a completed or cancelled turn; treating it as
+ *   background work leaves a persistent recovery notice on ordinary replies.
  */
 export function isOutOfTurnContentEvent(envelope: {
   type: string
   text?: string
 }): boolean {
   if (envelope.type === "content_delta" || envelope.type === "thinking") {
-    return (envelope.text?.length ?? 0) > 0
+    return (envelope.text?.trim().length ?? 0) > 0
   }
   return envelope.type === "tool_call"
 }

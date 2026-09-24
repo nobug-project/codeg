@@ -24,7 +24,7 @@ use objc2_web_kit::{
     WKNavigationActionPolicy, WKNavigationDelegate, WKScriptMessage, WKScriptMessageHandler,
     WKSnapshotConfiguration, WKUIDelegate, WKUserContentController, WKUserScript,
     WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration, WKWebsiteDataRecord,
-    WKWebsiteDataStore,
+    WKWebsiteDataStore, WKContentRuleList, WKContentRuleListStore,
 };
 use tauri_runtime_wry::wry::{self, WebViewExtMacOS};
 
@@ -1071,15 +1071,27 @@ fn profile_is_isolated(profile_id: &str) -> bool {
 
 /// A `WKWebViewConfiguration` whose data store is the profile's. Every regular
 /// tab is built from one; popups inherit their opener's instead (and with it
-/// the opener's profile).
-pub fn profile_configuration(mtm: MainThreadMarker, profile_id: &str) -> Retained<WKWebViewConfiguration> {
+/// the opener's profile, and a remote profile's rules: the user content
+/// controller is shared).
+pub fn profile_configuration(
+    mtm: MainThreadMarker,
+    profile_id: &str,
+) -> Result<Retained<WKWebViewConfiguration>, String> {
     let store = profile_store(mtm, profile_id);
     // SAFETY: main thread; both objects are live.
-    unsafe {
+    let configuration = unsafe {
         let configuration = WKWebViewConfiguration::new(mtm);
         configuration.setWebsiteDataStore(&store);
         configuration
+    };
+    if profile::is_remote_profile(profile_id) {
+        let rules = LOOPBACK_RULE_LIST.with(|slot| slot.borrow().clone()).ok_or_else(|| {
+            format!("browser profile {profile_id} cannot keep its pages off this computer yet")
+        })?;
+        // SAFETY: main thread; the controller is the configuration's own.
+        unsafe { configuration.userContentController().addContentRuleList(&rules) };
     }
+    Ok(configuration)
 }
 
 /// A configuration for a document guest: a data store that lives in memory
@@ -1092,6 +1104,110 @@ pub fn document_configuration(mtm: MainThreadMarker) -> Retained<WKWebViewConfig
         let configuration = WKWebViewConfiguration::new(mtm);
         configuration.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(mtm));
         configuration
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Remote-egress profiles: what WebKit sends around any proxy
+// ---------------------------------------------------------------------------
+//
+// Network.framework sends `localhost` and loopback addresses straight to this
+// machine whatever a store's proxy says, and nothing reaches that exception.
+// So the tabs of a remote profile (`browser/egress.rs`) address the remote
+// host's loopback through a `*.localhost` alias, which is proxied like any
+// other name, and a content rule list stops whatever a page addresses to a
+// loopback name itself: a request that fails is the right outcome for a page
+// of the remote host, one answered by whatever listens on this computer's
+// port of the same number is not.
+
+/// Identifier of the list in the app's content-rule-list store.
+const LOOPBACK_RULES_ID: &str = "codeg-remote-egress-loopback";
+
+/// Everything addressed to this machine by a literal name, blocked: every
+/// resource type (no `resource-type`), so documents, frames, subresources and
+/// WebSockets alike. `url-filter` is WebKit's cut-down regex — no alternation,
+/// hence one rule per name — and URLs reach it canonical: `127.1` arrives as
+/// `127.0.0.1`, `[0:0::1]` as `[::1]`, `[::ffff:127.0.0.1]` as
+/// `[::ffff:7f00:1]`. `*.localhost` names do not match: those are proxied.
+const LOOPBACK_RULES_JSON: &str = r#"[
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?localhost\\.?[:/]"},"action":{"type":"block"}},
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?127\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/]"},"action":{"type":"block"}},
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?0\\.0\\.0\\.0[:/]"},"action":{"type":"block"}},
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?\\[::1\\]"},"action":{"type":"block"}},
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?\\[::\\]"},"action":{"type":"block"}},
+{"trigger":{"url-filter":"^[a-z]+://([^/]*@)?\\[::ffff:7f"},"action":{"type":"block"}}
+]"#;
+
+thread_local! {
+    /// `LOOPBACK_RULES_JSON`, once compiled (once per run).
+    static LOOPBACK_RULE_LIST: RefCell<Option<Retained<WKContentRuleList>>> = const { RefCell::new(None) };
+    /// Probe pages by key, alive until their probe is over.
+    static PROBE_VIEWS: RefCell<HashMap<String, Retained<WKWebView>>> = RefCell::new(HashMap::new());
+}
+
+/// Compile the loopback rules if that has not been done this run; `done`
+/// hears how it went, on the main thread. A remote profile's tabs cannot be
+/// built before this succeeds (`profile_configuration`).
+pub fn prepare_loopback_rules(done: Box<dyn Fn(Result<(), String>) + 'static>) -> Result<(), String> {
+    let mtm = mtm()?;
+    if LOOPBACK_RULE_LIST.with(|slot| slot.borrow().is_some()) {
+        done(Ok(()));
+        return Ok(());
+    }
+    // SAFETY: main thread.
+    let store = unsafe { WKContentRuleListStore::defaultStore(mtm) }
+        .ok_or("WebKit has no content rule list store")?;
+    let block = RcBlock::new(move |list: *mut WKContentRuleList, error: *mut NSError| {
+        // SAFETY: WebKit passes a live list or a live error (or null), on the
+        // main thread.
+        let outcome = match unsafe { Retained::retain(list) } {
+            Some(list) => {
+                LOOPBACK_RULE_LIST.with(|slot| *slot.borrow_mut() = Some(list));
+                Ok(())
+            }
+            None if !error.is_null() => Err(unsafe { &*error }.localizedDescription().to_string()),
+            None => Err("the loopback rules did not compile".to_string()),
+        };
+        done(outcome);
+    });
+    // SAFETY: main thread; WebKit copies the block and calls it once.
+    unsafe {
+        store.compileContentRuleListForIdentifier_encodedContentRuleList_completionHandler(
+            Some(&NSString::from_str(LOOPBACK_RULES_ID)),
+            Some(&NSString::from_str(LOOPBACK_RULES_JSON)),
+            Some(&block),
+        );
+    }
+    Ok(())
+}
+
+/// Load `url` in a webview of `profile_id` that is never shown: the egress
+/// probe's page (see `browser/egress.rs`). Built from the configuration the
+/// profile's tabs get — store, proxy and rules — so what it proves holds for
+/// them. A `WKWebView` in no window loads and runs its page all the same.
+pub fn open_probe_view(profile_id: &str, url: &str, key: &str) -> Result<(), String> {
+    let mtm = mtm()?;
+    let configuration = profile_configuration(mtm, profile_id)?;
+    let url = NSURL::URLWithString(&NSString::from_str(url)).ok_or("invalid probe address")?;
+    // SAFETY: main thread; every object is live.
+    let webview = unsafe {
+        let frame = objc2_foundation::NSRect::new(
+            objc2_foundation::NSPoint::new(0.0, 0.0),
+            objc2_foundation::NSSize::new(800.0, 600.0),
+        );
+        let webview = WKWebView::initWithFrame_configuration(mtm.alloc(), frame, &configuration);
+        let _ = webview.loadRequest(&objc2_foundation::NSURLRequest::requestWithURL(&url));
+        webview
+    };
+    PROBE_VIEWS.with(|views| views.borrow_mut().insert(key.to_string(), webview));
+    Ok(())
+}
+
+/// The probe is over: its page goes.
+pub fn close_probe_view(key: &str) {
+    if let Some(webview) = PROBE_VIEWS.with(|views| views.borrow_mut().remove(key)) {
+        // SAFETY: main thread, live webview.
+        unsafe { webview.stopLoading() };
     }
 }
 
@@ -1115,8 +1231,9 @@ pub fn ensure_profile(profile_id: &str, proxy: Option<BrowserProxy>) -> Result<(
             None => Ok(()),
         };
     }
+    let remote = crate::browser::profile::is_remote_profile(profile_id);
     let configurations: Retained<NSArray<NSObject>> = match &proxy {
-        Some(proxy) => NSArray::from_retained_slice(&[network::proxy_config(proxy)?]),
+        Some(proxy) => NSArray::from_retained_slice(&[network::proxy_config(proxy, remote)?]),
         None => NSArray::new(),
     };
     // SAFETY: main thread; `proxyConfigurations` is a public property on
@@ -1137,7 +1254,14 @@ pub fn ensure_profile(profile_id: &str, proxy: Option<BrowserProxy>) -> Result<(
 /// whose store has not been created yet gets the proxy when it is
 /// (`ensure_profile` from `profile::prepare`).
 pub fn apply_proxy_to_profiles(proxy: Option<BrowserProxy>) -> Result<(), String> {
-    let ids: Vec<String> = PROFILES.with(|slot| slot.borrow().keys().cloned().collect());
+    // A remote profile's proxy is its egress, whatever the app's setting says.
+    let ids: Vec<String> = PROFILES.with(|slot| {
+        slot.borrow()
+            .keys()
+            .filter(|id| !crate::browser::profile::is_remote_profile(id))
+            .cloned()
+            .collect()
+    });
     let mut first_error = None;
     for id in ids {
         if let Err(err) = ensure_profile(&id, proxy.clone()) {
@@ -1290,13 +1414,13 @@ mod network {
     type CreateSocks5 = unsafe extern "C" fn(*mut NSObject) -> *mut NSObject;
     type CreateHttpConnect = unsafe extern "C" fn(*mut NSObject, *mut NSObject) -> *mut NSObject;
     type AddExcludedDomain = unsafe extern "C" fn(*mut NSObject, *const c_char);
+    type SetFailoverAllowed = unsafe extern "C" fn(*mut NSObject, bool);
 
     /// Connections to these hosts never go through the proxy: pages served
     /// from this machine (dev servers, codeg's own bridges) are the point of
     /// the built-in browser and must keep working whatever the proxy would do
     /// with them — the exception every browser and the `NO_PROXY` convention
-    /// make. (A remote-egress profile will want the opposite; it gets its own
-    /// configuration.)
+    /// make. A remote-egress profile wants the opposite, and gets none.
     const EXCLUDED_DOMAINS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
     fn symbol(name: &str) -> Result<*mut c_void, String> {
@@ -1310,7 +1434,14 @@ mod network {
         }
     }
 
-    pub fn proxy_config(proxy: &BrowserProxy) -> Result<Retained<NSObject>, String> {
+    /// `egress`: the configuration of a remote-egress profile — nothing
+    /// excluded, and no failing over to a direct connection when the proxy
+    /// cannot be reached: a direct connection would reach this computer, not
+    /// the remote host the page belongs to. (WebKit still sends `localhost`
+    /// and loopback addresses straight here whatever this says; the remote
+    /// profile's tabs use a `*.localhost` alias for those, and a content
+    /// rule stops what a page itself sends there.)
+    pub fn proxy_config(proxy: &BrowserProxy, egress: bool) -> Result<Retained<NSObject>, String> {
         // SAFETY: the signatures are Network.framework's declared ones.
         let (create_host, create_socks5, create_http_connect, add_excluded_domain) = unsafe {
             (
@@ -1333,9 +1464,17 @@ mod network {
                 ProxyScheme::Socks5 => create_socks5(endpoint_ptr),
             };
             let config = Retained::from_raw(config).ok_or("cannot create proxy configuration")?;
-            for domain in EXCLUDED_DOMAINS {
-                let domain = CString::new(domain).expect("static");
-                add_excluded_domain(Retained::as_ptr(&config) as *mut NSObject, domain.as_ptr());
+            let config_ptr = Retained::as_ptr(&config) as *mut NSObject;
+            if egress {
+                let set_failover_allowed = std::mem::transmute::<*mut c_void, SetFailoverAllowed>(
+                    symbol("nw_proxy_config_set_failover_allowed")?,
+                );
+                set_failover_allowed(config_ptr, false);
+            } else {
+                for domain in EXCLUDED_DOMAINS {
+                    let domain = CString::new(domain).expect("static");
+                    add_excluded_domain(config_ptr, domain.as_ptr());
+                }
             }
             Ok(config)
         }

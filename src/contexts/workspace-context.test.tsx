@@ -83,6 +83,17 @@ const foldersMock = vi.hoisted(() => {
   }
 })
 
+// A window bound to a remote codeg-server, when a test says so.
+const remoteMock = vi.hoisted(() => ({
+  remote: false,
+  serverBaseUrl: "https://dev.example.com",
+}))
+vi.mock(import("@/lib/transport"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRemoteDesktopMode: () => remoteMock.remote,
+  getServerBaseUrl: () => remoteMock.serverBaseUrl,
+}))
+
 vi.mock("@/contexts/active-folder-context", async () => {
   const { useSyncExternalStore } = await import("react")
   return {
@@ -3445,6 +3456,8 @@ describe("browser tabs", () => {
     resetBrowserTabStoreForTests()
     resetClosedTabStackForTests()
     resetBrowserPrefsForTests()
+    remoteMock.remote = false
+    remoteMock.serverBaseUrl = "https://dev.example.com"
   })
 
   function BrowserProbe() {
@@ -3640,6 +3653,100 @@ describe("browser tabs", () => {
         >
           suspend-last
         </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", {
+              remote: true,
+              profile: "p-work",
+            })
+          }
+        >
+          open-remote
+        </button>
+        <button onClick={() => openBrowserTab("http://localhost:3000/")}>
+          open-local-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { profile: "p-work" })
+          }
+        >
+          open-work-3000
+        </button>
+        <button
+          onClick={() =>
+            openBrowserTab("http://localhost:3000/", { remote: false })
+          }
+        >
+          open-here-3000
+        </button>
+        <button onClick={() => openBrowserTab("http://192.168.1.5:3000/")}>
+          open-server-host
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://127.0.0.1:8080/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-unmarked
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            openBrowserTab("http://localhost:3000/next", {
+              activate: false,
+              openerTabId: opener.id,
+            })
+          }}
+        >
+          open-from-remote
+        </button>
+        <button
+          onClick={() => {
+            const opener = fileTabs.find(
+              (t) => t.kind === "browser" && t.browser.remote === true
+            )
+            if (!opener) return
+            adoptBrowserTab({
+              backendTabId: `${opener.id.slice("browser:".length)}-p1`,
+              url: "http://localhost:3000/popup",
+              openerBackendTabId: opener.id.slice("browser:".length),
+            })
+          }}
+        >
+          adopt-from-remote
+        </button>
+        <button
+          onClick={() =>
+            restoreBrowserTabs([
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "p-work",
+                remote: true,
+              },
+              {
+                url: "http://localhost:5173/",
+                title: "",
+                folderId: null,
+                profile: "default",
+              },
+            ])
+          }
+        >
+          restore-remote
+        </button>
         <pre data-testid="tabs">
           {JSON.stringify(
             fileTabs.map((t) => ({
@@ -3650,6 +3757,8 @@ describe("browser tabs", () => {
               opener: t.kind === "browser" ? t.browser.openerTabId : undefined,
               url: t.kind === "browser" ? t.browser.initialUrl : undefined,
               profile: t.kind === "browser" ? t.browser.profile : undefined,
+              remote:
+                t.kind === "browser" ? t.browser.remote === true : undefined,
             }))
           )}
         </pre>
@@ -3667,6 +3776,7 @@ describe("browser tabs", () => {
     opener?: string | null
     url?: string
     profile?: string
+    remote?: boolean
   }> {
     return JSON.parse(screen.getByTestId("tabs").textContent ?? "[]")
   }
@@ -3916,6 +4026,177 @@ describe("browser tabs", () => {
     act(() => screen.getByText("adopt").click())
     const popup = readTabs().find((t) => t.url === "https://example.com/popup")
     expect(popup?.profile).toBe("default")
+  })
+
+  // An address of the remote codeg host is its own kind of tab: never the
+  // same tab as the local page on that address, never in a local profile.
+  it("keeps a remote tab apart from the local page on the same address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    let tabs = readTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].remote).toBe(true)
+    // The profile asked for has no say: the page is not in any profile of
+    // this computer.
+    expect(tabs[0].profile).toBe("default")
+    // The local page on the same address is a different tab…
+    act(() => screen.getByText("open-local-3000").click())
+    tabs = readTabs()
+    expect(tabs).toHaveLength(2)
+    expect(tabs.map((t) => t.remote)).toEqual([true, false])
+    // …and asking for the remote one again brings that one back.
+    act(() => screen.getByText("open-remote").click())
+    expect(readTabs()).toHaveLength(2)
+    expect(screen.getByTestId("active").textContent).toBe(tabs[0].id)
+  })
+
+  // A remote tab carries the default profile's id but is not a page of that
+  // profile: it must never make a local tab of a deleted profile a duplicate.
+  it("moves a dormant tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    act(() => setBrowserProfiles([]))
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  it("suspends a loaded tab of a deleted profile past a remote tab on its page", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-work-3000").click())
+    const local = readTabs()[1]
+    act(() =>
+      setBrowserTabState({
+        tabId: local.id.slice("browser:".length),
+        ownerWindow: "main",
+        kind: "page",
+        surface: "child",
+        channel: "native",
+        channelError: null,
+        url: "http://localhost:3000/",
+        requestedUrl: "http://localhost:3000/",
+        title: "Local",
+        favicon: null,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        origin: "http://localhost:3000",
+        zoom: 1,
+        error: null,
+        remoteHost: null,
+        openerTabId: null,
+        profile: "p-work",
+        agentGrant: null,
+      })
+    )
+    act(() => setBrowserProfiles([]))
+    act(() => markBrowserTabHidden(local.id))
+    act(() => screen.getByText("suspend-last").click())
+    expect(readTabs().map((t) => [t.remote, t.profile])).toEqual([
+      [true, "default"],
+      [false, "default"],
+    ])
+  })
+
+  // However it came to be opened — a page's ⌘-click, a refused pop-up opened
+  // anyway — an address of the remote host is remote in a remote window.
+  it("opens any address of the remote host as remote in a remote window", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-local-3000").click())
+    act(() => screen.getByText("open").click())
+    expect(readTabs().map((t) => [t.url, t.remote])).toEqual([
+      ["http://localhost:3000/", true],
+      // A public page is the same page from here.
+      ["https://example.com/docs#top", false],
+    ])
+  })
+
+  it("keeps an address a person opens on this computer local", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-here-3000").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  // The window reaches the server itself directly: its own private address
+  // is reachable from this computer.
+  it("leaves the server's own private address to this computer", () => {
+    remoteMock.remote = true
+    remoteMock.serverBaseUrl = "http://192.168.1.5:3080"
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-server-host").click())
+    expect(readTabs()[0].remote).toBe(false)
+  })
+
+  it("restores an address of the remote host as remote even without the mark", () => {
+    remoteMock.remote = true
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-unmarked").click())
+    expect(readTabs()[0].remote).toBe(true)
+  })
+
+  it("makes a tab opened from a remote tab, and its popups, remote too", () => {
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("open-remote").click())
+    act(() => screen.getByText("open-from-remote").click())
+    act(() => screen.getByText("adopt-from-remote").click())
+    const byUrl = new Map(readTabs().map((t) => [t.url, t]))
+    expect(byUrl.get("http://localhost:3000/next")?.remote).toBe(true)
+    expect(byUrl.get("http://localhost:3000/popup")?.remote).toBe(true)
+  })
+
+  it("restores a remote tab as remote, beside the local page on its address", () => {
+    setBrowserProfiles([{ id: "p-work", name: "Work" }])
+    render(
+      <WorkspaceProvider>
+        <BrowserProbe />
+      </WorkspaceProvider>
+    )
+    act(() => screen.getByText("restore-remote").click())
+    const tabs = readTabs()
+    expect(tabs.map((t) => [t.url, t.remote, t.profile])).toEqual([
+      ["http://localhost:5173/", true, "default"],
+      ["http://localhost:5173/", false, "default"],
+    ])
   })
 
   // A tab of a deleted profile must never recreate that profile's store:

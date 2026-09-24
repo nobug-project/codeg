@@ -7,6 +7,12 @@ import type { BrowserCapabilities } from "@/lib/browser/types"
 
 const mocks = vi.hoisted(() => ({
   capabilities: null as BrowserCapabilities | null,
+  remoteDesktop: false,
+}))
+
+vi.mock(import("@/lib/transport"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRemoteDesktopMode: () => mocks.remoteDesktop,
 }))
 
 vi.mock("@/lib/browser/use-browser-capabilities", () => ({
@@ -50,6 +56,7 @@ const CAPS: BrowserCapabilities = {
   profiles: true,
   signInUserAgent: true,
   ownedWindowControls: false,
+  remoteEgress: false,
 }
 
 function tab(id = "file:%2Ftmp%2Fa.html"): FileWorkspaceTab {
@@ -85,6 +92,21 @@ describe("HtmlPreview engine choice", () => {
     resetBrowserPrefsForTests()
     resetHtmlPreviewEngineOverridesForTests()
     mocks.capabilities = CAPS
+    mocks.remoteDesktop = false
+  })
+
+  // The document viewer reads the path off THIS computer's disk; a remote
+  // workspace's file is on the remote host, and only the inline preview reads
+  // it (through the server).
+  it("keeps to the inline renderer in a remote workspace window", async () => {
+    mocks.remoteDesktop = true
+    renderPreview()
+    await flush()
+    expect(screen.queryByTestId("doc-guest")).not.toBeInTheDocument()
+    expect(screen.getByTitle("HTML preview")).toBeInTheDocument()
+    expect(
+      screen.queryByLabelText("Use built-in browser preview")
+    ).not.toBeInTheDocument()
   })
 
   it("renders the document guest where the backend offers one", () => {

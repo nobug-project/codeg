@@ -6,6 +6,7 @@ import {
   Bug,
   Camera,
   MousePointerClick,
+  PencilLine,
   SquareDashedMousePointer,
   X,
 } from "lucide-react"
@@ -28,11 +29,13 @@ import {
   browserPickElement,
 } from "@/lib/browser/browser-api"
 import { useBrowserConsoleErrors } from "@/lib/browser/browser-tab-store"
+import { captureFile } from "@/lib/browser/capture-file"
 import type { BrowserTabState, PageHandoff } from "@/lib/browser/types"
 import { browserTabBackendId } from "@/lib/file-tab-id"
 import { emitAttachPageToSession } from "@/lib/session-attachment-events"
 import { cn } from "@/lib/utils"
 
+import { openScreenshotMarkup } from "./browser-screenshot-markup"
 import { FIELD_BTN, FIELD_PILL } from "./browser-toolbar-buttons"
 
 /**
@@ -62,22 +65,10 @@ function useTargetConversation(): string | null {
   return active && active.kind === "conversation" ? active.id : null
 }
 
-/** A `File` for the composer's ordinary image path, from what the backend
- *  base64'd. `atob` throws on malformed input, and an unusable picture must
- *  not take the block down with it. */
+/** A `File` for the composer's ordinary image path, when the handoff came
+ *  with a picture. */
 function imageFile(handoff: PageHandoff, name: string): File | undefined {
-  if (!handoff.image) return undefined
-  try {
-    const bytes = Uint8Array.from(atob(handoff.image.data), (c) =>
-      c.charCodeAt(0)
-    )
-    const extension = handoff.image.mime === "image/jpeg" ? "jpg" : "png"
-    return new File([bytes], `${name}.${extension}`, {
-      type: handoff.image.mime,
-    })
-  } catch {
-    return undefined
-  }
+  return handoff.image ? captureFile(handoff.image, name) : undefined
 }
 
 /** A file name that cannot surprise a filesystem: the label, letters and
@@ -198,6 +189,31 @@ export function BrowserSendToChatControl({
       .catch(failed)
   }, [backendId, conversationTabId, deliver, failed, t])
 
+  // The picture is taken first and marked up after, so what the person draws
+  // on is the page as it was when they asked for it — the dialog covers the
+  // page, and whatever the page does underneath meanwhile is not what they
+  // meant. The dialog itself lives in the workspace, not in this toolbar (see
+  // `BrowserScreenshotMarkupHost`).
+  const markUp = useCallback(() => {
+    if (!backendId || !conversationTabId) return
+    const target = conversationTabId
+    void browserPageCapture(backendId)
+      .then((handoff) => {
+        // Nothing to draw on — send what there is, as the plain entry would.
+        if (!handoff.image) {
+          deliver(handoff, t("chipScreenshot"), "screenshot")
+          return
+        }
+        openScreenshotMarkup({
+          capture: handoff.image,
+          text: handoff.text,
+          uri: handoff.url,
+          conversationTabId: target,
+        })
+      })
+      .catch(failed)
+  }, [backendId, conversationTabId, deliver, failed, t])
+
   const sendConsole = useCallback(() => {
     if (!backendId || !conversationTabId) return
     void browserPageConsole(backendId, true)
@@ -272,6 +288,10 @@ export function BrowserSendToChatControl({
         <DropdownMenuItem onSelect={screenshot}>
           <Camera className="h-3.5 w-3.5" />
           <span>{t("screenshot")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={markUp}>
+          <PencilLine className="h-3.5 w-3.5" />
+          <span>{t("markUp")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={sendConsole} disabled={!hasConsoleErrors}>
           <Bug className="h-3.5 w-3.5" />

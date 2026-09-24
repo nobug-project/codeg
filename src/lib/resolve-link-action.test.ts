@@ -91,6 +91,7 @@ describe("resolveLinkAction — base target and preferences", () => {
       url: "https://example.com",
       placement: "tab",
       remoteOverride: false,
+      remote: false,
     })
   })
 
@@ -324,6 +325,7 @@ describe("resolveLinkAction — remote workspace override", () => {
       url,
       placement: "tab",
       remoteOverride: true,
+      remote: true,
     })
   })
 
@@ -342,6 +344,24 @@ describe("resolveLinkAction — remote workspace override", () => {
     ).toMatchObject({ kind: "builtin", remoteOverride: true })
   })
 
+  // The window reaches its server directly: the server's own private
+  // address is reachable from here, and follows the ordinary rules.
+  it("leaves the server's own private address to the ordinary rules", () => {
+    expect(
+      resolveLinkAction(
+        "http://192.168.1.5:3000/",
+        ctx({ surface: { ...remote, remoteServerHost: "192.168.1.5" } })
+      )
+    ).toMatchObject({ kind: "builtin", remoteOverride: false, remote: false })
+    // Another private address is still the remote host's.
+    expect(
+      resolveLinkAction(
+        "http://192.168.1.6:3000/",
+        ctx({ surface: { ...remote, remoteServerHost: "192.168.1.5" } })
+      )
+    ).toMatchObject({ kind: "builtin", remoteOverride: true, remote: true })
+  })
+
   it("does not apply to public hosts in a remote window", () => {
     expect(
       resolveLinkAction(
@@ -349,6 +369,11 @@ describe("resolveLinkAction — remote workspace override", () => {
         ctx({ surface: remote, prefs: systemPrefs })
       )
     ).toEqual({ kind: "system", url: "https://github.com/" })
+    // A public page is the same page from here: an ordinary tab of this
+    // computer, not a remote one.
+    expect(
+      resolveLinkAction("https://github.com/", ctx({ surface: remote }))
+    ).toMatchObject({ kind: "builtin", remoteOverride: false, remote: false })
   })
 
   it("falls back to the ordinary rules when no built-in browser exists", () => {
@@ -408,6 +433,7 @@ describe("resolveLinkAction — web mode with the port bridge", () => {
       url,
       placement: "tab",
       remoteOverride: true,
+      remote: false,
     })
   })
 
@@ -479,6 +505,7 @@ describe("resolveLinkAction — web mode with the port bridge", () => {
       url: "http://localhost:3000/",
       placement: "tab",
       remoteOverride: false,
+      remote: false,
     })
   })
 })

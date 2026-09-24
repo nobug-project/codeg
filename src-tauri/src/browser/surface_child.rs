@@ -848,6 +848,27 @@ fn configure_child<'a>(
                     return false;
                 }
             }
+            // A remote profile's page on macOS addresses the remote host's
+            // loopback by an alias (see `browser::remote`), WebKit sending
+            // loopback addresses around the proxy: a link, redirect or script
+            // that goes to one is refused, and the tab goes to the same
+            // address on the alias instead. After the modifier-click check,
+            // which opens its own tab and so its own rewrite. A frame cannot
+            // be sent anywhere by the host; it is refused (its load would be
+            // stopped by the profile's loopback rules all the same). A form
+            // POSTed to a loopback address arrives as a GET: rare, since a
+            // remote page's own forms post to its own (alias) origin.
+            #[cfg(target_os = "macos")]
+            if profile::is_remote_profile(&nav_profile) {
+                if let Some(alias) = crate::browser::remote::alias_for(&parsed) {
+                    if main_frame {
+                        crate::browser::remote::redirect_to_alias(&nav_app, &nav_id, alias);
+                    } else {
+                        tracing::debug!("[browser] tab {nav_id} blocked a loopback frame: {url}");
+                    }
+                    return false;
+                }
+            }
             true
         })
         .with_on_page_load_handler({
@@ -923,7 +944,7 @@ fn configure_child<'a>(
         // store that dies with it.
         let configuration = match (configuration, kind) {
             (Some(configuration), _) => configuration,
-            (None, ChildKind::Page) => super::shim::macos::profile_configuration(mtm, profile),
+            (None, ChildKind::Page) => super::shim::macos::profile_configuration(mtm, profile)?,
             (None, ChildKind::Document(_)) => super::shim::macos::document_configuration(mtm),
         };
         builder = builder.with_webview_configuration(configuration);
@@ -931,13 +952,10 @@ fn configure_child<'a>(
     #[cfg(target_os = "windows")]
     {
         use tauri_runtime_wry::wry::WebViewBuilderExtWindows;
-        let _ = profile;
         // WebView2 takes the proxy (and everything else) from the environment's
-        // browser arguments: one string for every browser webview of the
-        // process, see `profile::windows_browser_args`.
-        builder = builder.with_additional_browser_args(profile::windows_browser_args(
-            profile::frozen_proxy().as_ref(),
-        ));
+        // browser arguments: one string per user-data folder for the life of
+        // the process, see `profile::windows_args_for`.
+        builder = builder.with_additional_browser_args(profile::windows_args_for(profile)?);
         // A popup: the opener's environment, arguments and user-data folder
         // included, which is what makes `NewWindowResponse::Create` acceptable
         // to the engine.
@@ -1162,7 +1180,7 @@ fn new_window_handler(
                 origin: None,
                 zoom: 1.0,
                 error: None,
-                remote_host: None,
+                remote_host: profile::remote_host(&profile),
                 opener_tab_id: Some(opener_tab_id.clone()),
                 profile: Some(profile.clone()),
                 agent_grant: None,

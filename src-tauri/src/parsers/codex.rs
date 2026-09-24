@@ -26,16 +26,95 @@ pub struct CodexParser {
     base_dir: PathBuf,
 }
 
-/// How many by-reference fork hops to follow when assembling a rollout's
-/// inherited history. Forking a fork is ordinary; an unbounded chain is not,
-/// and each hop costs a directory walk plus a whole file.
-const MAX_FORK_HOPS: usize = 8;
-
-/// How far into a rollout to look for the `session_meta` carrying the fork
+/// How far into a rollout to look for the `session_meta` carrying its history
 /// pointer. It is line 0 in every file on disk; the slack is for a future
 /// preamble, and the bound is what keeps this off the cost of a full parse for
-/// the overwhelming majority of rollouts, which are not forks.
+/// the overwhelming majority of rollouts, which inherit no history.
 const FORK_HEADER_SCAN_LINES: usize = 4;
+
+/// What a canonical rollout filename encodes.
+///
+/// codex names a thread's rollout `rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>.jsonl`.
+/// `thread/revert` then moves the thread onto a NEW immutable file,
+/// `rollout-<ts>-<thread>_<rollout>.jsonl`, and leaves the old one in place: the
+/// thread id is the conversation, the rollout id names one file — and is what a
+/// `history_base` points at. An ordinary rollout's rollout id is its thread id.
+#[derive(Clone, Copy)]
+struct RolloutFileName<'a> {
+    timestamp: &'a str,
+    thread_id: &'a str,
+    rollout_id: &'a str,
+}
+
+impl<'a> RolloutFileName<'a> {
+    fn parse(path: &'a Path) -> Option<Self> {
+        let core = path
+            .file_name()?
+            .to_str()?
+            .strip_prefix("rollout-")?
+            .strip_suffix(".jsonl")?;
+        let timestamp = core.get(..19)?;
+        chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%S").ok()?;
+        let ids = core.get(19..)?.strip_prefix('-')?;
+        let (thread_id, rollout_id) = ids.split_once('_').unwrap_or((ids, ids));
+        (!thread_id.is_empty() && !rollout_id.is_empty()).then_some(Self {
+            timestamp,
+            thread_id,
+            rollout_id,
+        })
+    }
+
+    /// Orders one thread's rollouts the way codex does when it has no SQLite
+    /// pointer to ask: by the filename's timestamp, then — for files created in
+    /// the same second — by the rollout id, a time-ordered UUIDv7.
+    fn recency(&self) -> (&'a str, &'a str) {
+        (self.timestamp, self.rollout_id)
+    }
+}
+
+/// Where a rollout's inherited history lives: the index of its header, the
+/// rollout id it continues, and the first ordinal NOT taken from that rollout.
+/// `None` for a rollout that holds its whole history itself.
+///
+/// Only the rollout's OWN header counts — the first `session_meta`. Anything
+/// after it is content, such as a parent header a legacy fork replayed inline.
+///
+/// `history_base` is the physical pointer, and the only one codex follows to
+/// read a thread. Forks write it, and so does `thread/revert`, which is why it
+/// names a ROLLOUT: a revert keeps the thread id and swaps the file, so the
+/// pointer can name an earlier file of this very thread. A fork's
+/// `forked_from_id` + `forked_from_ordinal_exclusive` is its logical lineage —
+/// codex keeps it when the fork is reverted and `history_base` moves to the
+/// fork's own earlier rollout — so it is read only when `history_base` is
+/// absent. Its id is a thread id, which is also the rollout id of that thread's
+/// original file.
+fn inherited_history_pointer(lines: &[String]) -> Option<(usize, String, u64)> {
+    let (header_idx, header) = lines
+        .iter()
+        .take(FORK_HEADER_SCAN_LINES)
+        .enumerate()
+        .find_map(|(idx, line)| {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            (value.get("type").and_then(serde_json::Value::as_str) == Some("session_meta"))
+                .then_some((idx, value))
+        })?;
+    let payload = header.get("payload")?;
+    let pointer = |id: Option<&serde_json::Value>, cut: Option<&serde_json::Value>| {
+        let id = id?.as_str().map(str::trim).filter(|id| !id.is_empty())?;
+        Some((header_idx, id.to_string(), cut?.as_u64()?))
+    };
+    let history_base = payload.get("history_base");
+    pointer(
+        history_base.and_then(|base| base.get("thread_id")),
+        history_base.and_then(|base| base.get("end_ordinal_exclusive")),
+    )
+    .or_else(|| {
+        pointer(
+            payload.get("forked_from_id"),
+            payload.get("forked_from_ordinal_exclusive"),
+        )
+    })
+}
 
 /// A rollout line's `ordinal`, the position codex assigns within a thread's
 /// stream. `None` for older rollouts, which predate the field.
@@ -63,9 +142,9 @@ fn codex_line_ordinal(line: &str) -> Option<u64> {
 /// replayed prefix whenever the parent had already talked to an earlier
 /// sub-agent of the same name.
 ///
-/// Independent of the by-reference fork splice in `rollout_lines_inner`, and the
-/// two never fire on one file: a by-reference fork is identified by
-/// `forked_from_ordinal_exclusive`, which no sub-agent rollout carries.
+/// Independent of the by-reference splice in `rollout_lines`, which runs it on
+/// every rollout it reads before splicing them together, so the seed is dropped
+/// from whichever file of a lineage holds it.
 fn trim_subagent_replay_prefix(own: Vec<String>) -> Vec<String> {
     let Some((header_idx, cut)) = own
         .iter()
@@ -136,126 +215,159 @@ impl CodexParser {
         Self { base_dir }
     }
 
-    /// Every line of a rollout, with a BY-REFERENCE fork's inherited history
+    /// Every line of a rollout, with the history it inherits BY REFERENCE
     /// spliced in ahead of its own.
     ///
-    /// codex-acp 1.8.0's `session/fork` writes the child a rollout that contains
-    /// no history at all — just `session_meta` naming
-    /// `forked_from_id` + `forked_from_ordinal_exclusive`, then whatever the
-    /// child does next. Read alone it parses to zero turns, which is what put
-    /// "this session has no messages" under every `[Fork] …` row.
+    /// Two things write a rollout that holds only part of its history plus a
+    /// pointer to the rest (see `inherited_history_pointer`):
+    ///
+    /// * A fork. codex-acp 1.8.0's `session/fork` writes the child a rollout
+    ///   that contains no history at all — just `session_meta` naming where it
+    ///   forked from, then whatever the child does next. Read alone it parses to
+    ///   zero turns, which is what put "this session has no messages" under
+    ///   every `[Fork] …` row.
+    /// * `thread/revert` (Codex Desktop's edit / retry). The thread keeps its
+    ///   id but moves onto a NEW rollout that inherits the old one only up to
+    ///   the reverted turn. Read alone it loses every turn before that; the old
+    ///   file instead shows the turns the revert discarded and nothing after.
     ///
     /// Older forks are not like this: they REPLAY the parent inline (that is the
     /// second `session_meta` header `is_forked_thread_header` keys off) and so
-    /// need no help. `forked_from_ordinal_exclusive` is what tells the two
-    /// apart — on disk, only the by-reference shape carries it. The ordinal
-    /// filter makes that distinction self-enforcing rather than a bet: the
-    /// parent contributes ordinals BELOW the cut and the child only its own
-    /// at-or-above, so a child that did replay inline can't end up with the
-    /// history twice.
+    /// need no help. They carry no cut, which is what tells the shapes apart,
+    /// and the ordinal filter makes that distinction self-enforcing rather than
+    /// a bet: the inherited rollout contributes ordinals BELOW the cut and this
+    /// one only its own at-or-above, so a child that did replay inline can't
+    /// end up with the history twice. The same filter drops a revert's
+    /// abandoned tail — the new rollout's ordinals resume AT the cut, so the old
+    /// file's records past it are exactly the ones it replaced.
+    ///
+    /// Pointers chain — a fork of a fork, and every revert adds a rollout — so
+    /// they are followed to the root. A chain ends early at a rollout it has
+    /// already visited (a malformed cycle) or one codeg cannot find, which is
+    /// not an error: the rollout may have been pruned, or live in a codex home
+    /// this parser isn't pointed at. What was reached renders on its own rather
+    /// than the conversation being refused. One that is there but fails to
+    /// open is an error, as this rollout's own file would be: the summary cache
+    /// keys on this rollout alone, so rendering what was reached would keep
+    /// serving the truncated history after the failure cleared.
     ///
     /// The assembled order reproduces codex's own inline shape exactly — the
-    /// child's header, then the parent's stream, then the child's body — because
-    /// the parser latches `parent_id` from the FIRST header it sees and the
-    /// child's is the one that declares the lineage.
-    fn rollout_lines(&self, path: &std::path::Path) -> Result<Vec<String>, ParseError> {
-        self.rollout_lines_inner(path, MAX_FORK_HOPS)
-    }
+    /// child's header, then the inherited stream, then the child's body —
+    /// because the parser latches `parent_id` from the FIRST header it sees and
+    /// the child's is the one that declares the lineage.
+    fn rollout_lines(&self, path: &Path) -> Result<Vec<String>, ParseError> {
+        let read = |path: &Path| -> Result<Vec<String>, ParseError> {
+            let own = BufReader::new(fs::File::open(path)?)
+                .lines()
+                .map_while(Result::ok)
+                .collect();
+            Ok(trim_subagent_replay_prefix(own))
+        };
 
-    fn rollout_lines_inner(
-        &self,
-        path: &std::path::Path,
-        hops_left: usize,
-    ) -> Result<Vec<String>, ParseError> {
-        let own: Vec<String> = BufReader::new(fs::File::open(path)?)
-            .lines()
-            .map_while(Result::ok)
+        let mut lines = read(path)?;
+        // Newest first: every rollout that continues another, with its header's
+        // index and the cut into the one it continues.
+        let mut continuations = Vec::new();
+        let mut visited: HashSet<String> = RolloutFileName::parse(path)
+            .map(|name| name.rollout_id.to_string())
+            .into_iter()
             .collect();
-        let own = trim_subagent_replay_prefix(own);
-
-        // The fork pointer rides the first header; anything past it is content.
-        let Some((header_idx, parent_id, cut)) = own
-            .iter()
-            .enumerate()
-            .take_while(|(idx, _)| *idx < FORK_HEADER_SCAN_LINES)
-            .find_map(|(idx, line)| {
-                let value: serde_json::Value = serde_json::from_str(line).ok()?;
-                let payload = value.get("payload")?;
-                if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
-                    return None;
-                }
-                let parent = payload
-                    .get("forked_from_id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())?;
-                let cut = payload
-                    .get("forked_from_ordinal_exclusive")
-                    .and_then(serde_json::Value::as_u64)?;
-                Some((idx, parent.to_string(), cut))
-            })
-        else {
-            return Ok(own);
-        };
-
-        if hops_left == 0 {
-            tracing::warn!(
-                parent_id = %parent_id,
-                "[codex] fork chain deeper than {MAX_FORK_HOPS}; rendering without inherited history"
-            );
-            return Ok(own);
-        }
-
-        // A parent codeg cannot find is not an error: the rollout may have been
-        // pruned, or live in a codex home this parser isn't pointed at. Degrade
-        // to the child's own lines rather than refusing the conversation.
-        let Some(parent_path) = self.find_rollout_by_session_id(&parent_id) else {
-            tracing::debug!(
-                parent_id = %parent_id,
-                "[codex] forked rollout names a parent with no file here"
-            );
-            return Ok(own);
-        };
-        if parent_path == path {
-            return Ok(own);
-        }
-        let parent = self.rollout_lines_inner(&parent_path, hops_left - 1)?;
-
-        let mut assembled = Vec::with_capacity(parent.len() + own.len());
-        assembled.push(own[header_idx].clone());
-        assembled.extend(
-            parent
-                .into_iter()
-                .filter(|line| codex_line_ordinal(line).is_none_or(|ord| ord < cut)),
-        );
-        assembled.extend(own.into_iter().enumerate().filter_map(|(idx, line)| {
-            if idx == header_idx {
-                return None;
+        while let Some((header_idx, base_id, cut)) = inherited_history_pointer(&lines) {
+            if !visited.insert(base_id.clone()) {
+                tracing::warn!(
+                    rollout_id = %base_id,
+                    "[codex] rollout history points back into itself; rendering what was reached"
+                );
+                break;
             }
-            codex_line_ordinal(&line)
-                .is_none_or(|ord| ord >= cut)
-                .then_some(line)
-        }));
-        Ok(assembled)
+            let Some(base_path) = self.find_rollout_by_rollout_id(&base_id) else {
+                tracing::debug!(
+                    rollout_id = %base_id,
+                    "[codex] rollout inherits from a rollout with no file here"
+                );
+                break;
+            };
+            let base = read(&base_path)?;
+            continuations.push((std::mem::replace(&mut lines, base), header_idx, cut));
+        }
+        if continuations.is_empty() {
+            return Ok(lines);
+        }
+
+        // Oldest first from here, each record's ordinal read once however many
+        // splices it passes through.
+        let with_ordinals = |lines: Vec<String>| -> Vec<(Option<u64>, String)> {
+            lines
+                .into_iter()
+                .map(|line| (codex_line_ordinal(&line), line))
+                .collect()
+        };
+        let mut assembled = with_ordinals(lines);
+        for (own, header_idx, cut) in continuations.into_iter().rev() {
+            let mut own = with_ordinals(own);
+            let header = own.remove(header_idx);
+            let mut spliced = Vec::with_capacity(assembled.len() + own.len() + 1);
+            spliced.push(header);
+            spliced.extend(
+                assembled
+                    .into_iter()
+                    .filter(|(ord, _)| ord.is_none_or(|ord| ord < cut)),
+            );
+            spliced.extend(
+                own.into_iter()
+                    .filter(|(ord, _)| ord.is_none_or(|ord| ord >= cut)),
+            );
+            assembled = spliced;
+        }
+        Ok(assembled.into_iter().map(|(_, line)| line).collect())
     }
 
-    /// The rollout file for a session id. Codex embeds the id in the filename,
-    /// so this never opens a file.
-    fn find_rollout_by_session_id(&self, session_id: &str) -> Option<std::path::PathBuf> {
-        if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id.contains("..") {
-            return None;
-        }
+    /// Every rollout file under the sessions root, in traversal order.
+    fn rollout_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
         WalkDir::new(&self.base_dir)
             .into_iter()
             .filter_map(Result::ok)
-            .map(|entry| entry.path().to_path_buf())
-            .find(|path| {
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    return false;
-                }
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                name.starts_with("rollout-") && name.contains(session_id)
+            .map(walkdir::DirEntry::into_path)
+            .filter(|path| {
+                path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                    && path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .starts_with("rollout-")
             })
+    }
+
+    /// The rollout file a history pointer names. Codex embeds the id in the
+    /// filename, so this never opens a file — but it matches the rollout id the
+    /// name encodes, never a substring: a revert's new file carries the thread
+    /// id too, and a pointer to the thread's original rollout must not resolve
+    /// to the file holding the pointer.
+    fn find_rollout_by_rollout_id(&self, rollout_id: &str) -> Option<PathBuf> {
+        self.rollout_paths().find(|path| {
+            RolloutFileName::parse(path).is_some_and(|name| name.rollout_id == rollout_id)
+        })
+    }
+
+    /// The rollout a thread currently uses.
+    ///
+    /// Usually its only one. `thread/revert` moves a thread onto a new rollout
+    /// under the same thread id and leaves the old file in place, so the id
+    /// matches several files and traversal order would decide — on NTFS, whose
+    /// listings are name-sorted, always in favour of the stale original. codex
+    /// records the switch in its SQLite state; codeg reads only the rollouts, so
+    /// this is codex's own rule for when that state is unavailable: the newest
+    /// file.
+    fn find_current_rollout(&self, thread_id: &str) -> Option<PathBuf> {
+        self.rollout_paths()
+            .filter_map(|path| {
+                let name = RolloutFileName::parse(&path)?;
+                let recency = (name.thread_id == thread_id)
+                    .then(|| (name.timestamp.to_string(), name.rollout_id.to_string()))?;
+                Some((recency, path))
+            })
+            .max_by(|(a, _), (b, _)| a.cmp(b))
+            .map(|(_, path)| path)
     }
 
     /// Load Codex's append-only session title index. The transcript remains the
@@ -751,21 +863,29 @@ impl AgentParser for CodexParser {
         // must refresh a title even when the rollout itself is unchanged.
         let indexed_titles = self.load_thread_name_index();
 
-        for entry in WalkDir::new(&self.base_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path().to_path_buf();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let fname = path.file_name().unwrap_or_default().to_string_lossy();
-            if !fname.starts_with("rollout-") {
+        let paths: Vec<PathBuf> = self.rollout_paths().collect();
+        let names: Vec<Option<RolloutFileName>> = paths
+            .iter()
+            .map(|path| RolloutFileName::parse(path))
+            .collect();
+        // A reverted thread's earlier rollouts stay on disk under its id, but
+        // they are prefixes its current one inherits (see `rollout_lines`), not
+        // conversations of their own.
+        let mut current: HashMap<&str, (&str, &str)> = HashMap::new();
+        for name in names.iter().flatten() {
+            current
+                .entry(name.thread_id)
+                .and_modify(|newest| *newest = (*newest).max(name.recency()))
+                .or_insert(name.recency());
+        }
+
+        for (path, name) in paths.iter().zip(&names) {
+            if name.is_some_and(|name| current.get(name.thread_id) != Some(&name.recency())) {
                 continue;
             }
 
-            match super::summary_cache::get_or_parse(AgentType::Codex, &path, || {
-                self.parse_jsonl_summary(&path)
+            match super::summary_cache::get_or_parse(AgentType::Codex, path, || {
+                self.parse_jsonl_summary(path)
             }) {
                 Ok(Some(mut summary)) => {
                     if let Some(title) = indexed_titles.get(&summary.id) {
@@ -788,28 +908,34 @@ impl AgentParser for CodexParser {
             ));
         }
 
-        // Find the conversation file by walking the directory tree
-        for entry in WalkDir::new(&self.base_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path().to_path_buf();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let fname = path.file_name().unwrap_or_default().to_string_lossy();
-            if fname.contains(conversation_id) {
-                let mut detail = self.parse_conversation_detail(&path, conversation_id)?;
-                if let Some(title) = self.load_thread_name_index().get(conversation_id) {
-                    detail.summary.title = Some(title.clone());
-                }
-                return Ok(detail);
-            }
-        }
+        // A conversation id is a thread id, read from the rollout the thread
+        // currently uses. One that names no rollout's thread — a summary that
+        // fell back to its file stem — still finds its file by name.
+        let path = self.find_current_rollout(conversation_id).or_else(|| {
+            WalkDir::new(&self.base_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .map(walkdir::DirEntry::into_path)
+                .find(|path| {
+                    path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                        && path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .contains(conversation_id)
+                })
+        });
+        let Some(path) = path else {
+            return Err(ParseError::ConversationNotFound(
+                conversation_id.to_string(),
+            ));
+        };
 
-        Err(ParseError::ConversationNotFound(
-            conversation_id.to_string(),
-        ))
+        let mut detail = self.parse_conversation_detail(&path, conversation_id)?;
+        if let Some(title) = self.load_thread_name_index().get(conversation_id) {
+            detail.summary.title = Some(title.clone());
+        }
+        Ok(detail)
     }
 }
 
@@ -6438,12 +6564,770 @@ mod tests {
         assert_eq!(inherited, 1, "the inline replay must not be doubled");
     }
 
+    /// One paginated rollout record, shaped exactly as codex writes it.
+    fn paginated_line(ts: &str, ord: u64, msg_type: &str, payload: serde_json::Value) -> String {
+        serde_json::json!({"timestamp": ts, "ordinal": ord, "type": msg_type, "payload": payload})
+            .to_string()
+    }
+
+    fn event_line(ts: &str, ord: u64, payload: serde_json::Value) -> String {
+        paginated_line(ts, ord, "event_msg", payload)
+    }
+
+    /// `thread/revert` output, byte for byte in the shape codex writes it: the
+    /// thread's original rollout is left intact, and a NEW file named
+    /// `rollout-<ts>-<thread>_<rollout>.jsonl` — same `id` / `session_id` inside —
+    /// declares `history_base`, the prefix of the original it keeps. Its own
+    /// ordinals resume AT the cut, so they collide with the abandoned tail's.
+    ///
+    /// Here turn 2 was interrupted and the user sent the prompt again: the
+    /// revert cut sits at turn 2's `task_started` (ordinal 5).
+    fn reverted_thread_fixture(sessions_dir: &Path, thread_id: &str, rollout_id: &str) {
+        let rollout_dir = sessions_dir.join("2026").join("09").join("20");
+        fs::create_dir_all(&rollout_dir).expect("create rollout dir");
+
+        let original = [
+            paginated_line(
+                "2026-09-20T02:00:00.000Z",
+                0,
+                "session_meta",
+                serde_json::json!({
+                    "id": thread_id,
+                    "session_id": thread_id,
+                    "timestamp": "2026-09-20T02:00:00.000Z",
+                    "cwd": "/tmp/work",
+                    "originator": "Codex Desktop",
+                    "cli_version": "0.147.0-alpha.6.6",
+                    "history_mode": "paginated"
+                }),
+            ),
+            event_line(
+                "2026-09-20T02:00:01.000Z",
+                1,
+                serde_json::json!({"type": "task_started", "turn_id": "turn-1"}),
+            ),
+            event_line(
+                "2026-09-20T02:00:01.100Z",
+                2,
+                serde_json::json!({"type": "user_message", "message": "first prompt"}),
+            ),
+            event_line(
+                "2026-09-20T02:00:05.000Z",
+                3,
+                serde_json::json!({"type": "agent_message", "message": "first answer"}),
+            ),
+            event_line(
+                "2026-09-20T02:00:05.100Z",
+                4,
+                serde_json::json!({"type": "task_complete", "turn_id": "turn-1"}),
+            ),
+            // Turn 2, abandoned by the revert.
+            event_line(
+                "2026-09-20T02:01:00.000Z",
+                5,
+                serde_json::json!({"type": "task_started", "turn_id": "turn-2"}),
+            ),
+            event_line(
+                "2026-09-20T02:01:00.100Z",
+                6,
+                serde_json::json!({"type": "user_message", "message": "second prompt"}),
+            ),
+            event_line(
+                "2026-09-20T02:01:03.000Z",
+                7,
+                serde_json::json!({"type": "agent_message", "message": "abandoned partial answer"}),
+            ),
+            event_line(
+                "2026-09-20T02:01:04.000Z",
+                8,
+                serde_json::json!({"type": "turn_aborted", "turn_id": "turn-2", "reason": "interrupted"}),
+            ),
+        ];
+        let cut = 5;
+        // Byte offset immediately after the last kept record — the file is
+        // written `\n`-separated below, so each record costs its length + 1.
+        let end_byte_offset: usize = original[..cut].iter().map(|line| line.len() + 1).sum();
+        fs::write(
+            rollout_dir.join(format!("rollout-2026-09-20T10-00-00-{thread_id}.jsonl")),
+            format!("{}\n", original.join("\n")),
+        )
+        .expect("write original rollout");
+
+        let replacement = [
+            paginated_line(
+                "2026-09-20T02:05:00.000Z",
+                cut as u64,
+                "session_meta",
+                serde_json::json!({
+                    "id": thread_id,
+                    "session_id": thread_id,
+                    "timestamp": "2026-09-20T02:05:00.000Z",
+                    "cwd": "/tmp/work",
+                    "originator": "Codex Desktop",
+                    "cli_version": "0.154.0-alpha.6.2",
+                    "history_mode": "paginated",
+                    "history_base": {
+                        "thread_id": thread_id,
+                        "end_ordinal_exclusive": cut,
+                        "end_byte_offset": end_byte_offset
+                    }
+                }),
+            ),
+            event_line(
+                "2026-09-20T02:05:01.000Z",
+                6,
+                serde_json::json!({"type": "task_started", "turn_id": "turn-3"}),
+            ),
+            event_line(
+                "2026-09-20T02:05:01.100Z",
+                7,
+                serde_json::json!({"type": "user_message", "message": "second prompt"}),
+            ),
+            event_line(
+                "2026-09-20T02:05:09.000Z",
+                8,
+                serde_json::json!({"type": "agent_message", "message": "complete answer"}),
+            ),
+            event_line(
+                "2026-09-20T02:05:09.100Z",
+                9,
+                serde_json::json!({"type": "task_complete", "turn_id": "turn-3"}),
+            ),
+        ];
+        fs::write(
+            rollout_dir.join(format!(
+                "rollout-2026-09-20T10-05-00-{thread_id}_{rollout_id}.jsonl"
+            )),
+            format!("{}\n", replacement.join("\n")),
+        )
+        .expect("write replacement rollout");
+    }
+
+    fn rendered_texts(detail: &ConversationDetail) -> Vec<String> {
+        detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A reverted thread renders the prefix its CURRENT rollout inherits, then
+    /// that rollout's own continuation — not the original file (stale, and
+    /// still carrying the abandoned turn), and not the new file alone (which
+    /// holds no history before the cut).
+    #[test]
+    fn a_reverted_thread_renders_its_inherited_prefix_then_the_continuation() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread_id = "01a0c3d4-1111-7aaa-8bbb-000000000001";
+        reverted_thread_fixture(
+            &sessions_dir,
+            thread_id,
+            "01a0c3d9-2222-7ccc-8ddd-000000000002",
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        let detail = parser
+            .get_conversation(thread_id)
+            .expect("reverted conversation parses");
+
+        assert_eq!(
+            rendered_texts(&detail),
+            vec![
+                "first prompt".to_string(),
+                "first answer".to_string(),
+                "second prompt".to_string(),
+                "complete answer".to_string(),
+            ],
+            "inherited turn once, the abandoned tail dropped, the continuation after it"
+        );
+        assert_eq!(detail.summary.id, thread_id);
+    }
+
+    /// Both rollouts of a reverted thread carry its id, but only the current
+    /// one is the conversation: the list shows the thread once, counted and
+    /// titled from its effective history.
+    #[test]
+    fn a_reverted_thread_lists_once_from_its_current_rollout() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread_id = "01a0c3d4-3333-7aaa-8bbb-000000000003";
+        reverted_thread_fixture(
+            &sessions_dir,
+            thread_id,
+            "01a0c3d9-4444-7ccc-8ddd-000000000004",
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        let summaries = parser.list_conversations().expect("list conversations");
+
+        assert_eq!(
+            summaries.iter().filter(|s| s.id == thread_id).count(),
+            1,
+            "the superseded rollout is not a conversation of its own"
+        );
+        let summary = &summaries[0];
+        assert_eq!(summary.message_count, 4);
+        assert_eq!(summary.title.as_deref(), Some("first prompt"));
+        // The superseded rollout alone counts four and titles the same — its
+        // abandoned answer stands in for the continuation's — so only where
+        // the history ends tells the two apart.
+        assert_eq!(
+            summary.ended_at,
+            Some(
+                "2026-09-20T02:05:09.100Z"
+                    .parse::<DateTime<Utc>>()
+                    .expect("timestamp")
+            ),
+            "listed from the current rollout, not the superseded one"
+        );
+    }
+
+    /// A prompt at `ord` — one text block once rendered.
+    fn prompt_line(ord: u64, text: &str) -> String {
+        event_line(
+            &format!("2026-09-21T02:00:{ord:02}.000Z"),
+            ord,
+            serde_json::json!({"type": "user_message", "message": text}),
+        )
+    }
+
+    /// `thread`'s header at `ord`, merged with `extra` (its pointers).
+    fn header_line(ord: u64, thread: &str, extra: serde_json::Value) -> String {
+        let mut payload = serde_json::json!({
+            "id": thread,
+            "session_id": thread,
+            "cwd": "/tmp/work",
+            "history_mode": "paginated"
+        });
+        let fields = payload.as_object_mut().expect("payload object");
+        for (key, value) in extra.as_object().expect("extra object") {
+            fields.insert(key.clone(), value.clone());
+        }
+        paginated_line(
+            &format!("2026-09-21T02:00:{ord:02}.000Z"),
+            ord,
+            "session_meta",
+            payload,
+        )
+    }
+
+    /// A `history_base` naming `base` (the rollout `rollout_id`'s lines) up to
+    /// `cut`, with the byte offset codex would record for it.
+    fn history_base(rollout_id: &str, base: &[String], cut: u64) -> serde_json::Value {
+        let end_byte_offset: usize = base
+            .iter()
+            .take_while(|line| codex_line_ordinal(line).is_some_and(|ord| ord < cut))
+            .map(|line| line.len() + 1)
+            .sum();
+        serde_json::json!({
+            "thread_id": rollout_id,
+            "end_ordinal_exclusive": cut,
+            "end_byte_offset": end_byte_offset
+        })
+    }
+
+    fn write_rollout(sessions_dir: &Path, file_name: &str, lines: &[String]) {
+        let dir = sessions_dir.join("2026").join("09").join("21");
+        fs::create_dir_all(&dir).expect("create rollout dir");
+        fs::write(dir.join(file_name), format!("{}\n", lines.join("\n"))).expect("write rollout");
+    }
+
+    /// Every revert adds a rollout, and a revert inside the previous revert's
+    /// own turns points at THAT rollout — so a thread edited twice is three
+    /// files deep, and each keeps only its part.
+    #[test]
+    fn a_thread_reverted_twice_keeps_each_rollouts_part() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread = "01a0e000-0000-7000-8000-000000000001";
+        let first_revert = "01a0e001-0000-7000-8000-000000000002";
+        let second_revert = "01a0e002-0000-7000-8000-000000000003";
+
+        let original = vec![
+            header_line(0, thread, serde_json::json!({})),
+            prompt_line(1, "a1"),
+            prompt_line(2, "a2"),
+            prompt_line(3, "a3, dropped by the first revert"),
+        ];
+        let first = vec![
+            header_line(
+                3,
+                thread,
+                serde_json::json!({"history_base": history_base(thread, &original, 3)}),
+            ),
+            prompt_line(4, "b4"),
+            prompt_line(5, "b5, dropped by the second revert"),
+        ];
+        let second = vec![
+            header_line(
+                5,
+                thread,
+                serde_json::json!({"history_base": history_base(first_revert, &first, 5)}),
+            ),
+            prompt_line(6, "c6"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{thread}.jsonl"),
+            &original,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{thread}_{first_revert}.jsonl"),
+            &first,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-02-00-{thread}_{second_revert}.jsonl"),
+            &second,
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        let detail = parser
+            .get_conversation(thread)
+            .expect("reverted thread parses");
+        assert_eq!(rendered_texts(&detail), vec!["a1", "a2", "b4", "c6"]);
+
+        let summaries = parser.list_conversations().expect("list conversations");
+        assert_eq!(summaries.len(), 1, "three rollouts, one thread");
+        assert_eq!(summaries[0].message_count, 4);
+    }
+
+    /// A revert further back than the previous revert's first turn points past
+    /// that rollout, straight at the original: the rollout in between is
+    /// discarded whole.
+    #[test]
+    fn a_revert_behind_an_earlier_revert_discards_that_rollout() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread = "01a0e100-0000-7000-8000-000000000001";
+        let first_revert = "01a0e101-0000-7000-8000-000000000002";
+        let second_revert = "01a0e102-0000-7000-8000-000000000003";
+
+        let original = vec![
+            header_line(0, thread, serde_json::json!({})),
+            prompt_line(1, "a1"),
+            prompt_line(2, "a2, dropped by the second revert"),
+            prompt_line(3, "a3, dropped by the first revert"),
+        ];
+        let first = vec![
+            header_line(
+                3,
+                thread,
+                serde_json::json!({"history_base": history_base(thread, &original, 3)}),
+            ),
+            prompt_line(4, "b4, dropped with its whole rollout"),
+        ];
+        let second = vec![
+            header_line(
+                2,
+                thread,
+                serde_json::json!({"history_base": history_base(thread, &original, 2)}),
+            ),
+            prompt_line(3, "c3"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{thread}.jsonl"),
+            &original,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{thread}_{first_revert}.jsonl"),
+            &first,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-02-00-{thread}_{second_revert}.jsonl"),
+            &second,
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(thread)
+            .expect("reverted thread parses");
+        assert_eq!(rendered_texts(&detail), vec!["a1", "c3"]);
+    }
+
+    /// A fork of a reverted thread points at the rollout the parent was using
+    /// when it forked — its revert, not the original that still carries the
+    /// parent's thread id in its filename and the turns the revert dropped.
+    #[test]
+    fn a_fork_of_a_reverted_thread_inherits_the_history_it_was_cut_from() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let parent = "01a0e200-0000-7000-8000-000000000001";
+        let parent_revert = "01a0e201-0000-7000-8000-000000000002";
+        let child = "01a0e202-0000-7000-8000-000000000003";
+
+        let original = vec![
+            header_line(0, parent, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            prompt_line(2, "p2, dropped by the parent's revert"),
+        ];
+        let reverted = vec![
+            header_line(
+                2,
+                parent,
+                serde_json::json!({"history_base": history_base(parent, &original, 2)}),
+            ),
+            prompt_line(3, "p3"),
+            prompt_line(4, "p4, after the fork point"),
+        ];
+        let forked = vec![
+            header_line(
+                4,
+                child,
+                serde_json::json!({
+                    "forked_from_id": parent,
+                    "forked_from_ordinal_exclusive": 4,
+                    "history_base": history_base(parent_revert, &reverted, 4)
+                }),
+            ),
+            prompt_line(5, "c5"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{parent}.jsonl"),
+            &original,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{parent}_{parent_revert}.jsonl"),
+            &reverted,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-02-00-{child}.jsonl"),
+            &forked,
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(child)
+            .expect("fork parses");
+        assert_eq!(rendered_texts(&detail), vec!["p1", "p3", "c5"]);
+        assert_eq!(detail.summary.id, child);
+    }
+
+    /// Reverting a fork keeps the fork's `forked_from_*` (its logical parent
+    /// and cut) while `history_base` moves to the fork's own earlier rollout.
+    /// Following the fork pointer instead would skip every turn the fork took
+    /// before the revert.
+    #[test]
+    fn a_reverted_fork_keeps_its_own_turns_from_before_the_revert() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let parent = "01a0e300-0000-7000-8000-000000000001";
+        let child = "01a0e301-0000-7000-8000-000000000002";
+        let child_revert = "01a0e302-0000-7000-8000-000000000003";
+
+        let parent_lines = vec![
+            header_line(0, parent, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            prompt_line(2, "p2, after the fork point"),
+        ];
+        let fork = |base: serde_json::Value| {
+            serde_json::json!({
+                "forked_from_id": parent,
+                "forked_from_ordinal_exclusive": 2,
+                "history_base": base
+            })
+        };
+        let forked = vec![
+            header_line(2, child, fork(history_base(parent, &parent_lines, 2))),
+            prompt_line(3, "c3"),
+            prompt_line(4, "c4, dropped by the revert"),
+        ];
+        let reverted = vec![
+            header_line(4, child, fork(history_base(child, &forked, 4))),
+            prompt_line(5, "c5"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{parent}.jsonl"),
+            &parent_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{child}.jsonl"),
+            &forked,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-02-00-{child}_{child_revert}.jsonl"),
+            &reverted,
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(child)
+            .expect("reverted fork parses");
+        assert_eq!(rendered_texts(&detail), vec!["p1", "c3", "c5"]);
+    }
+
+    /// Older forks carry `history_base` without `forked_from_ordinal_exclusive`
+    /// (codex's own reader still derives the cut from `history_base` for them).
+    #[test]
+    fn a_fork_pointing_only_through_history_base_inherits_its_parent() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let parent = "01a0e400-0000-7000-8000-000000000001";
+        let child = "01a0e401-0000-7000-8000-000000000002";
+
+        let parent_lines = vec![
+            header_line(0, parent, serde_json::json!({})),
+            prompt_line(1, "p1"),
+            prompt_line(2, "p2, after the fork point"),
+        ];
+        let forked = vec![
+            header_line(
+                2,
+                child,
+                serde_json::json!({
+                    "forked_from_id": parent,
+                    "history_base": history_base(parent, &parent_lines, 2)
+                }),
+            ),
+            prompt_line(3, "c3"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-00-00-{parent}.jsonl"),
+            &parent_lines,
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{child}.jsonl"),
+            &forked,
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(child)
+            .expect("fork parses");
+        assert_eq!(rendered_texts(&detail), vec!["p1", "c3"]);
+    }
+
+    /// Nothing caps the chain: a thread edited over and over is a long lineage,
+    /// and dropping its root would lose the start of the conversation.
+    #[test]
+    fn a_long_revert_lineage_is_followed_to_its_root() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread = "01a0e500-0000-7000-8000-000000000000";
+        let reverts = 12;
+
+        let mut expected = Vec::new();
+        let mut previous: Option<(String, Vec<String>)> = None;
+        for step in 0..=reverts {
+            let header_ord = 2 * step;
+            let rollout_id = if step == 0 {
+                thread.to_string()
+            } else {
+                format!("01a0e5{step:02}-0000-7000-8000-000000000000")
+            };
+            let extra = match &previous {
+                Some((base_id, base)) => {
+                    serde_json::json!({"history_base": history_base(base_id, base, header_ord)})
+                }
+                None => serde_json::json!({}),
+            };
+            let kept = format!("kept {step}");
+            let mut lines = vec![
+                header_line(header_ord, thread, extra),
+                prompt_line(header_ord + 1, &kept),
+            ];
+            expected.push(kept);
+            if step < reverts {
+                lines.push(prompt_line(header_ord + 2, &format!("dropped {step}")));
+            }
+            let file_name = if step == 0 {
+                format!("rollout-2026-09-21T10-00-00-{thread}.jsonl")
+            } else {
+                format!("rollout-2026-09-21T10-{step:02}-00-{thread}_{rollout_id}.jsonl")
+            };
+            write_rollout(&sessions_dir, &file_name, &lines);
+            previous = Some((rollout_id, lines));
+        }
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(thread)
+            .expect("long lineage parses");
+        assert_eq!(rendered_texts(&detail), expected);
+    }
+
+    /// A pointer is resolved by the rollout id the filename encodes. With the
+    /// original rollout gone, a pointer to it has nothing to resolve to — a
+    /// substring match would find the revert itself, which carries the same
+    /// thread id in its name.
+    #[test]
+    fn a_pointer_never_resolves_to_a_rollout_that_merely_shares_the_thread_id() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread = "01a0e600-0000-7000-8000-000000000001";
+        let revert = "01a0e601-0000-7000-8000-000000000002";
+
+        let reverted = vec![
+            header_line(
+                3,
+                thread,
+                serde_json::json!({"history_base": {
+                    "thread_id": thread, "end_ordinal_exclusive": 3, "end_byte_offset": 512
+                }}),
+            ),
+            prompt_line(4, "own turn"),
+        ];
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{thread}_{revert}.jsonl"),
+            &reverted,
+        );
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        assert_eq!(parser.find_rollout_by_rollout_id(thread), None);
+        let detail = parser
+            .get_conversation(thread)
+            .expect("a revert whose original is gone still opens");
+        assert_eq!(rendered_texts(&detail), vec!["own turn"]);
+    }
+
+    /// Malformed pointers that loop back end the chain instead of spinning.
+    #[test]
+    fn a_history_pointer_cycle_renders_what_it_reached() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread = "01a0e700-0000-7000-8000-000000000001";
+        let older = "01a0e701-0000-7000-8000-000000000002";
+        let newer = "01a0e702-0000-7000-8000-000000000003";
+        let pointer = |rollout_id: &str, cut: u64| {
+            serde_json::json!({"history_base": {
+                "thread_id": rollout_id, "end_ordinal_exclusive": cut, "end_byte_offset": 0
+            }})
+        };
+
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-01-00-{thread}_{older}.jsonl"),
+            &[
+                header_line(1, thread, pointer(newer, 1)),
+                prompt_line(2, "older"),
+            ],
+        );
+        write_rollout(
+            &sessions_dir,
+            &format!("rollout-2026-09-21T10-02-00-{thread}_{newer}.jsonl"),
+            &[
+                header_line(3, thread, pointer(older, 3)),
+                prompt_line(4, "newer"),
+            ],
+        );
+
+        let detail = CodexParser::with_base_dir(sessions_dir)
+            .get_conversation(thread)
+            .expect("a cyclic lineage still opens");
+        assert_eq!(rendered_texts(&detail), vec!["older", "newer"]);
+    }
+
+    /// An inherited rollout that is there but fails to open fails the read, and
+    /// nothing from that failure is remembered: once the file opens again the
+    /// thread lists and renders whole. Rendering what was reached instead would
+    /// have the summary cache, keyed on the unchanged current rollout, keep
+    /// serving the truncated summary.
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_rollout_that_fails_to_open_is_retried_not_remembered() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let thread_id = "01a0c3d4-5555-7aaa-8bbb-000000000005";
+        reverted_thread_fixture(
+            &sessions_dir,
+            thread_id,
+            "01a0c3d9-6666-7ccc-8ddd-000000000006",
+        );
+        let original = sessions_dir
+            .join("2026")
+            .join("09")
+            .join("20")
+            .join(format!("rollout-2026-09-20T10-00-00-{thread_id}.jsonl"));
+        let aside = temp_dir.path().join("original.jsonl");
+        fs::rename(&original, &aside).expect("move the original aside");
+        // Still found under its name, but opening it fails — as root too.
+        std::os::unix::fs::symlink(temp_dir.path().join("nowhere.jsonl"), &original)
+            .expect("leave a dangling symlink in its place");
+
+        let parser = CodexParser::with_base_dir(sessions_dir);
+        assert!(parser.get_conversation(thread_id).is_err());
+        assert!(parser
+            .list_conversations()
+            .expect("list conversations")
+            .iter()
+            .all(|s| s.id != thread_id));
+
+        fs::remove_file(&original).expect("remove the symlink");
+        fs::rename(&aside, &original).expect("put the original back");
+
+        let summaries = parser.list_conversations().expect("list conversations");
+        let summary = summaries
+            .iter()
+            .find(|s| s.id == thread_id)
+            .expect("listed once the original opens");
+        assert_eq!(summary.message_count, 4, "no truncated summary was cached");
+        assert_eq!(
+            rendered_texts(&parser.get_conversation(thread_id).expect("opens")),
+            vec![
+                "first prompt",
+                "first answer",
+                "second prompt",
+                "complete answer"
+            ]
+        );
+    }
+
+    #[test]
+    fn rollout_file_names_carry_the_thread_and_the_rollout_id() {
+        let thread = "01a0e800-0000-7000-8000-000000000001";
+        let revert = "01a0e801-0000-7000-8000-000000000002";
+        let parsed = |name: String| {
+            let path = PathBuf::from(name);
+            RolloutFileName::parse(&path).map(|n| {
+                (
+                    n.timestamp.to_string(),
+                    n.thread_id.to_string(),
+                    n.rollout_id.to_string(),
+                )
+            })
+        };
+
+        assert_eq!(
+            parsed(format!("rollout-2026-09-21T10-00-00-{thread}.jsonl")),
+            Some(("2026-09-21T10-00-00".into(), thread.into(), thread.into()))
+        );
+        assert_eq!(
+            parsed(format!(
+                "rollout-2026-09-21T10-05-00-{thread}_{revert}.jsonl"
+            )),
+            Some(("2026-09-21T10-05-00".into(), thread.into(), revert.into()))
+        );
+        for name in [
+            format!("rollout-2026-09-21T10-00-00-{thread}.jsonl.zst"),
+            format!("rollout-2026-13-45T10-00-00-{thread}.jsonl"),
+            format!("rollout-{thread}.jsonl"),
+            format!("agent-{thread}.jsonl"),
+            "rollout-2026-09-21T10-00-00-.jsonl".to_string(),
+        ] {
+            assert_eq!(parsed(name.clone()), None, "{name}");
+        }
+    }
+
     use std::collections::HashMap;
 
     use super::extract_codex_title_candidate;
     use super::extract_context_window_used_tokens_from_token_count_info;
     use super::extract_response_item_user_image_blocks;
     use super::extract_turn_usage_from_codex_usage;
+    use super::codex_line_ordinal;
     use super::codex_parent_thread_id;
     use super::completed_mcp_call;
     use super::serialize_preview;
@@ -6459,6 +7343,7 @@ mod tests {
     use super::redact_encrypted_args;
     use super::resolve_codex_home_dir_from;
     use super::trim_subagent_replay_prefix;
+    use super::RolloutFileName;
     use super::CODEX_PLAN_APPROVAL_PROMPT;
     use super::CODEX_PLAN_APPROVED_OUTPUT;
     use super::CODEX_SUBAGENT_LAUNCH_KEY;
@@ -6476,7 +7361,7 @@ mod tests {
     use chrono::{DateTime, Duration, Utc};
     use std::env;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn write_index_title_fixture(

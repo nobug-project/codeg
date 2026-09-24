@@ -241,6 +241,8 @@
     "enableProxy": "Activer le proxy système",
     "proxyAddress": "Adresse du proxy",
     "proxyHint": "Prend en charge http(s)/socks5, exemple : {example}. Actif uniquement lorsque le proxy système est activé.",
+    "proxyBypass": "Ne pas utiliser le proxy pour",
+    "proxyBypassHint": "Séparez les entrées par des virgules, sans espaces, par exemple <code>{example}</code>. <code>example.com</code> correspond à ce domaine et <code>.example.com</code> à tous ses sous-domaines ; les adresses IP sont également acceptées. Les adresses locales <code>localhost,127.0.0.1,::1</code> sont toujours jointes directement et n’ont pas besoin d’être ajoutées. La liste s’applique comme variable d’environnement NO_PROXY.",
     "save": "Enregistrer",
     "saving": "Enregistrement...",
     "proxyRequired": "L’URL du proxy est requise lorsque le proxy est activé",
@@ -300,6 +302,8 @@
     "rollbackSuccess": "Retour à la version précédente. Rechargement...",
     "rollbackFailed": "Échec du retour en arrière. Consultez les journaux du serveur.",
     "updateErrors": {
+      "permissionDenied": "Impossible d’écrire dans {path} : les mises à jour ne peuvent pas être installées sur place. Effectuez la mise à jour manuellement avec les droits d’administrateur ou vérifiez les autorisations d’installation.",
+      "targetWriteFailed": "Impossible d’écrire dans {path} : les mises à jour ne peuvent pas être installées sur place ({reason}).",
       "sourceUnavailable": "Impossible d’atteindre la source de mise à jour. Vérifiez votre réseau ou proxy et réessayez.",
       "network": "La connexion réseau a échoué. Vérifiez votre réseau ou proxy et réessayez.",
       "downloadFailed": "Impossible de télécharger le paquet de mise à jour. Veuillez réessayer plus tard.",
@@ -3006,8 +3010,6 @@
           "openAgentsSettings": "Ouvrir les paramètres des agents",
           "retry": "Réessayer"
         },
-        "agentsSetupHint": "Ouvrez Paramètres > Agents pour gérer l'installation.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "Impossible de lire la configuration actuelle de l'agent.",
           "disabled": "{agent} est désactivé dans les paramètres des agents. Activez-le avant de vous connecter.",
@@ -3032,15 +3034,18 @@
           "turnFailedAuthRequired": "{agent} a besoin que vous vous reconnectiez avant de pouvoir exécuter ce tour. Connectez-vous depuis les Paramètres, puis renvoyez le message.",
           "agentAuthRequired": "{agent} n'a pas pu démarrer de session : aucun identifiant utilisable. Reconnecte-toi depuis Paramètres → Agents → {agent}, puis rouvre cette conversation.",
           "grokModelSwitchIncompatibleAgent": "{agent} ne peut pas basculer vers ce modèle dans une conversation existante. Démarrez une nouvelle session pour l'utiliser.",
+          "setModeFailed": "{agent} n'a pas pu changer de mode.",
+          "setConfigOptionFailed": "{agent} n'a pas pu appliquer ce réglage.",
+          "goalControlFailed": "{agent} n'a pas pu mettre à jour l'objectif.",
+          "imageDropped": "{agent} n'a pas reçu une image jointe.",
+          "sessionLoadFallback": "{agent} n'a pas pu restaurer la session précédente et en a démarré une nouvelle ; le contexte antérieur n'est plus disponible.",
           "turnFailedEmpty": "{agent} a terminé le tour sans produire de réponse.",
           "turnFailedEmptyProtocol": "{agent} a produit une sortie que codeg n'a pas pu analyser — la version de l'agent ne correspond peut-être pas au protocole.",
-          "turnFailedEmptyMetadata": "{agent} n'a envoyé que des mises à jour d'état ce tour-ci (plan / mode / utilisation) et aucune réponse.",
-          "detailsInAlerts": "Ouvrez les alertes de la barre d'état et développez les détails pour voir la sortie de l'agent."
+          "turnFailedEmptyMetadata": "{agent} n'a envoyé que des mises à jour d'état ce tour-ci (plan / mode / utilisation) et aucune réponse."
         },
         "unableReadAgentConfig": "Impossible de lire la configuration de l'agent : {message}",
         "connectFailedTitle": "Échec de la connexion de {agent}",
         "toolFallbackTitle": "Outil",
-        "eventErrorTitle": "Erreur de l'agent",
         "notificationTurnComplete": "{agent} a terminé de répondre",
         "notificationError": "{agent} erreur : {message}",
         "notificationQuestion": "{agent} attend votre réponse",
@@ -3057,7 +3062,8 @@
           "lineNoErrorWithDelay": "{retry}, {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "{agent} a réglé {option} sur {actual} au lieu de {requested}"
+        "configOptionAdjusted": "{agent} a réglé {option} sur {actual} au lieu de {requested}",
+        "noticeTitle": "{agent} : {title}"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3783,7 +3789,6 @@
         "reconnecting": "Reconnexion…",
         "reconnectDisabledDuringTurn": "Disponible une fois le tour en cours terminé",
         "dismiss": "Ignorer",
-        "reconnectFailed": "Échec de la reconnexion de la session",
         "applied": "Nouvelle configuration appliquée"
       },
       "piProjectTrust": {
@@ -4221,7 +4226,7 @@
     "agentTypeRequired": "Le type d'agent est requis.",
     "agentTypeImmutableHint": "Le type d'agent ne peut pas être modifié après la création.",
     "model": "Modèle",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modèle Principal",
     "claudeReasoningModel": "Modèle de Raisonnement (réflexion)",
@@ -6265,6 +6270,7 @@
       "ownedWindow": "Cette page s'affiche dans sa propre fenêtre.",
       "ownedWindowShow": "Afficher la fenêtre",
       "remoteBanner": "Ouvert via {host}",
+      "remoteBannerDown": "Connexion à {host} perdue. Elle sera rétablie à la prochaine requête.",
       "navigationBlocked": "Navigation bloquée : {host}",
       "navigationBlockedRule": "bloquée par une règle de site",
       "navigationBlockedScheme": "ce type d'adresse ne peut pas s'ouvrir ici",
@@ -6278,7 +6284,17 @@
       "agentGrantLost": "Partage terminé : la page a quitté {origin}",
       "agentGrantLostShare": "Partager aussi {origin}",
       "agentGrantReplaced": "Partage terminé : un autre programme sert maintenant {origin}",
-      "agentGrantReplacedShare": "Partager quand même"
+      "agentGrantReplacedShare": "Partager quand même",
+      "errorRemoteRefused": "Rien n'écoute à cette adresse sur l'hôte distant",
+      "errorRemoteRefusedHint": "{host} a refusé la connexion. Vérifiez que le serveur derrière cette adresse y est lancé.",
+      "errorRemoteUnreachable": "L'hôte distant ne peut pas joindre cette adresse",
+      "errorRemoteUnreachableHint": "Vu depuis {host}, le nom ne se résout pas ou aucune route n'y mène.",
+      "errorRemoteNotAllowed": "Le serveur distant n'ouvre pas cette adresse au navigateur",
+      "errorRemoteNotAllowedHint": "Le codeg-server de {host} ne laisse son tunnel du navigateur joindre que des adresses privées (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "L'hôte distant a mis trop de temps à se connecter",
+      "errorRemoteTimeoutHint": "{host} n'a pas obtenu de réponse de cette adresse à temps. Le serveur est peut-être occupé ou derrière un pare-feu.",
+      "errorTunnelDown": "La connexion à l'hôte distant est coupée",
+      "errorTunnelDownHint": "Le tunnel vers {host} ne transporte rien pour l'instant. Réessayez quand il sera de nouveau joignable."
     },
     "tab": {
       "untitled": "Nouvel onglet"
@@ -6300,6 +6316,20 @@
       "unreachableHint": "Le serveur codeg expose cette page sur {origin}, mais votre navigateur ne l'atteint pas. Publiez ce port (voir CODEG_BRIDGE_PORTS) ou définissez CODEG_BRIDGE_PUBLIC_HOST ; si codeg est servi en HTTPS, les ports passerelle doivent l'être aussi.",
       "unreachableHostHint": "Le serveur codeg a placé cette page sur {origin}, mais votre navigateur ne peut pas l'atteindre. Ce nom d'hôte doit pointer vers le serveur codeg et traverser le proxy placé devant : un enregistrement DNS générique et un vhost générique (voir CODEG_BRIDGE_HOST_PATTERN).",
       "errorTitle": "Cette page ne peut pas être affichée ici"
+    },
+    "remote": {
+      "title": "Cette adresse se trouve sur {host}",
+      "titleUnnamed": "Cette adresse se trouve sur l'hôte distant",
+      "description": "Elle désigne la machine sur laquelle tourne cet espace de travail, pas cet ordinateur.",
+      "copyAddress": "Copier l'adresse",
+      "copied": "Adresse copiée",
+      "tryHost": "Essayer {host}",
+      "tryHostHint": "Ouvre {address} dans un onglet de cet ordinateur. Cela fonctionne si la page écoute sur toutes les interfaces réseau et si cet ordinateur peut joindre son port.",
+      "openHere": "Ouvrir sur cet ordinateur",
+      "openHereHint": "Ouvre l'adresse dans un onglet de cet ordinateur. Cela fonctionne si cet ordinateur est sur le même réseau.",
+      "retry": "Réessayer",
+      "connecting": "Connexion via {host}…",
+      "connectingUnnamed": "Connexion via l'hôte distant…"
     },
     "download": {
       "started": "Téléchargement…",
@@ -6356,6 +6386,7 @@
       "shareControl": "Lecture et actions",
       "levelDefault": "Par défaut",
       "notShareable": "Cette page n'a pas d'adresse web à partager avec les agents",
+      "remoteWindow": "Les agents d'un espace de travail distant s'exécutent sur son hôte et ne peuvent pas utiliser le navigateur de cet ordinateur",
       "shared": "Partagée",
       "sharedControl": "Partagée · peut agir",
       "sharedWith": "Les agents peuvent lire {origin}",
@@ -6449,6 +6480,7 @@
       "noConversation": "Ouvre une conversation à laquelle envoyer cette page",
       "pickElement": "Choisir un élément…",
       "screenshot": "Envoyer une capture",
+      "markUp": "Annoter une capture…",
       "consoleErrors": "Envoyer les erreurs de la console",
       "consoleClean": "Rien n'a échoué sur cette page",
       "picking": "Sélection…",
@@ -6459,9 +6491,20 @@
       "noConsoleErrors": "Cette page n'a affiché aucune erreur",
       "chipElement": "Élément de la page",
       "chipScreenshot": "Capture de la page",
+      "chipMarkedScreenshot": "Capture annotée",
       "chipConsole": "{count, plural, one {# erreur de console} other {# erreurs de console}}",
       "gone": "Cette conversation n'est plus ouverte",
-      "consoleErrorsCount": "{count, plural, one {Envoyer la # erreur de console} other {Envoyer les # erreurs de console}}"
+      "consoleErrorsCount": "{count, plural, one {Envoyer la # erreur de console} other {Envoyer les # erreurs de console}}",
+      "markupTitle": "Annoter la capture",
+      "markupTools": "Outil de dessin",
+      "markupBox": "Cadre",
+      "markupArrow": "Flèche",
+      "markupUndo": "Défaire",
+      "markupClear": "Effacer",
+      "markupHint": "Faites glisser sur l'image pour dessiner. Chaque marque porte un numéro auquel votre message peut faire référence.",
+      "markupCount": "{count, plural, one {# marque} other {# marques}}",
+      "markupCancel": "Annuler",
+      "markupSend": "Ajouter à la conversation"
     }
   },
   "browser": {
@@ -6473,6 +6516,16 @@
     "inspector": {
       "error": {
         "switchedOff": "Cet onglet a été ouvert alors que l’inspecteur web était désactivé. Activez-le dans les réglages du navigateur, puis rouvrez la page."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "Ouvrir les adresses de l'hôte distant dans le navigateur intégré nécessite macOS 14 ou une version ultérieure.",
+        "unsupported": "Le codeg-server distant est trop ancien pour relayer le trafic du navigateur. Mettez-le à jour pour ouvrir ses adresses ici.",
+        "disabled": "Le tunnel du navigateur est désactivé sur le codeg-server distant (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "Impossible de joindre le tunnel du navigateur du codeg-server distant ({reason}).",
+        "bypassed": "Le moteur du navigateur de cet ordinateur envoie certaines adresses en dehors du tunnel ; les pages de l'hôte distant restent donc fermées plutôt que d'être chargées depuis cet ordinateur.",
+        "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
   }

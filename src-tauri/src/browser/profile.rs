@@ -14,7 +14,10 @@
 //! exists, the others are minted when the user creates one in the settings);
 //! everything platform-specific is derived from the id — a stable data-store
 //! identifier on macOS 14+, a directory on Windows / Linux — so the backend
-//! keeps no list of its own. Every profile shares the app's proxy setting.
+//! keeps no list of its own. Every profile shares the app's proxy setting —
+//! except the remote-egress profiles (`remote-<connection id>`), which the
+//! backend names itself, one per remote connection, and whose proxy is that
+//! connection's egress (`browser/egress.rs`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -43,6 +46,96 @@ pub fn valid_profile_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Prefix of the remote-egress profiles: `remote-<connection id>`. Never an
+/// id the frontend mints (it mints `p-…`), and refused from it at the command
+/// boundary (`browser_open_tab` takes the connection instead): a remote
+/// profile's proxy is the one thing about it that must not be anything else,
+/// and only the egress path sets it up.
+pub const REMOTE_PROFILE_PREFIX: &str = "remote-";
+
+/// The remote-egress profile of a remote connection.
+pub fn remote_profile_id(connection_id: i32) -> String {
+    format!("{REMOTE_PROFILE_PREFIX}{connection_id}")
+}
+
+pub fn is_remote_profile(profile_id: &str) -> bool {
+    profile_id.starts_with(REMOTE_PROFILE_PREFIX)
+}
+
+/// The remote connection a remote profile belongs to.
+pub fn remote_connection_id(profile_id: &str) -> Option<i32> {
+    profile_id.strip_prefix(REMOTE_PROFILE_PREFIX)?.parse().ok()
+}
+
+/// A remote profile's egress: the SOCKS listener its traffic goes to, and the
+/// remote host that traffic comes out of (what its tabs say they go through).
+#[derive(Debug, Clone)]
+struct RemoteEgress {
+    socks: std::net::SocketAddr,
+    host: String,
+}
+
+/// Every remote profile's egress. Set before the profile's first tab; the
+/// listener is fixed for the process (see `browser/egress.rs`), the host is
+/// refreshed at every open, as the connection's address may have been edited.
+static REMOTE_EGRESS: Mutex<Option<HashMap<String, RemoteEgress>>> = Mutex::new(None);
+
+fn remote_egress_entry(profile_id: &str) -> Option<RemoteEgress> {
+    REMOTE_EGRESS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()?
+        .get(profile_id)
+        .cloned()
+}
+
+pub fn set_remote_egress(profile_id: &str, socks: std::net::SocketAddr, host: &str) {
+    REMOTE_EGRESS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(profile_id.to_string(), RemoteEgress { socks, host: host.to_string() });
+}
+
+/// The remote profile's connection is gone: nothing may be built in the
+/// profile any more (`prepare` refuses a remote profile without an egress).
+pub fn forget_remote_egress(profile_id: &str) {
+    if let Some(map) = REMOTE_EGRESS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        map.remove(profile_id);
+    }
+}
+
+fn remote_egress(profile_id: &str) -> Option<BrowserProxy> {
+    let socks = remote_egress_entry(profile_id)?.socks;
+    Some(BrowserProxy {
+        scheme: ProxyScheme::Socks5,
+        host: socks.ip().to_string(),
+        port: socks.port(),
+    })
+}
+
+/// The remote host a tab of `profile_id` reaches the network from: `None`
+/// for every profile but a remote one.
+pub fn remote_host(profile_id: &str) -> Option<String> {
+    if !is_remote_profile(profile_id) {
+        return None;
+    }
+    remote_egress_entry(profile_id).map(|egress| egress.host)
+}
+
+/// The proxy a profile's tabs use: its egress for a remote profile (which
+/// must have been set up — a remote profile without its egress would send
+/// the remote host's addresses to this computer), the app's setting for
+/// every other one.
+pub fn proxy_for(profile_id: &str) -> Result<Option<BrowserProxy>, String> {
+    if is_remote_profile(profile_id) {
+        return remote_egress(profile_id)
+            .map(Some)
+            .ok_or_else(|| format!("browser profile {profile_id} has no egress"));
+    }
+    current_proxy()
 }
 
 /// `WKWebsiteDataStore` identifier of the default profile (macOS 14+):
@@ -238,6 +331,30 @@ pub fn windows_browser_args(proxy: Option<&BrowserProxy>) -> String {
     args
 }
 
+/// Browser arguments for WebView2 for `profile_id`: a remote profile routes
+/// everything through its egress — loopback included, which Chromium would
+/// otherwise send straight to this machine (`<-loopback>` switches that
+/// implicit exception off) — and every other profile uses the app's proxy as
+/// the process froze it. A remote profile has a folder of its own, so its
+/// string never meets another on one folder.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn windows_args_for(profile_id: &str) -> Result<String, String> {
+    if is_remote_profile(profile_id) {
+        let proxy = proxy_for(profile_id)?;
+        let mut args = windows_browser_args(proxy.as_ref());
+        args.push_str(" --proxy-bypass-list=<-loopback>");
+        return Ok(args);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(windows_browser_args(frozen_proxy().as_ref()))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(windows_browser_args(current_proxy().ok().flatten().as_ref()))
+    }
+}
+
 pub fn proxy_status() -> BrowserProxyStatus {
     platform_proxy_status()
 }
@@ -314,13 +431,21 @@ pub fn check(profile_id: &str) -> Result<(), String> {
 /// current proxy. Idempotent and cheap after the first call.
 pub fn prepare(app: &AppHandle, profile_id: &str) -> Result<(), String> {
     check(profile_id)?;
+    // Not a single tab of a remote profile without its egress, on any
+    // platform: built with the app's proxy (or none), it would reach this
+    // computer instead of the remote host.
+    if is_remote_profile(profile_id) && remote_egress(profile_id).is_none() {
+        return Err(format!("browser profile {profile_id} has no egress"));
+    }
     #[cfg(target_os = "macos")]
     {
-        let proxy = current_proxy();
+        let proxy = if is_remote_profile(profile_id) {
+            proxy_for(profile_id)?
+        } else {
+            proxy_or_none(current_proxy())
+        };
         let profile_id = profile_id.to_string();
-        run_on_main(app, move || {
-            crate::browser::shim::macos::ensure_profile(&profile_id, proxy_or_none(proxy))
-        })?
+        run_on_main(app, move || crate::browser::shim::macos::ensure_profile(&profile_id, proxy))?
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -921,6 +1046,33 @@ mod tests {
         assert!(is_sign_in_host_among("accounts.google.com", &extra));
         assert!(is_sign_in_host_among("accounts.google.com", &[]));
         assert!(parse_host_list("").is_empty());
+    }
+
+    #[test]
+    fn a_remote_profile_goes_only_through_its_egress() {
+        let id = remote_profile_id(9001);
+        assert_eq!(id, "remote-9001");
+        assert_eq!(remote_connection_id(&id), Some(9001));
+        assert_eq!(remote_connection_id("remote-x"), None);
+        assert_eq!(remote_connection_id(DEFAULT_PROFILE_ID), None);
+        assert!(is_remote_profile(&id) && valid_profile_id(&id));
+        assert!(!is_remote_profile(DEFAULT_PROFILE_ID) && !is_remote_profile("p-abc"));
+        // No egress yet: no proxy, no arguments, no host — never the app's.
+        assert!(proxy_for(&id).is_err());
+        assert!(windows_args_for(&id).is_err());
+        assert_eq!(remote_host(&id), None);
+
+        set_remote_egress(&id, "127.0.0.1:45678".parse().unwrap(), "box.example.com:8443");
+        let proxy = proxy_for(&id).unwrap().unwrap();
+        assert_eq!(proxy.to_url_string(), "socks5://127.0.0.1:45678");
+        let args = windows_args_for(&id).unwrap();
+        assert!(args.contains(" --proxy-server=socks5://127.0.0.1:45678"), "{args}");
+        assert!(args.ends_with(" --proxy-bypass-list=<-loopback>"), "{args}");
+        assert_eq!(remote_host(&id).as_deref(), Some("box.example.com:8443"));
+        // Only a remote profile has a remote host.
+        set_remote_egress("p-abc", "127.0.0.1:1".parse().unwrap(), "elsewhere");
+        assert_eq!(remote_host("p-abc"), None);
+        assert!(!windows_args_for(DEFAULT_PROFILE_ID).unwrap().contains("<-loopback>"));
     }
 
     #[test]

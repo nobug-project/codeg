@@ -330,10 +330,24 @@ pub fn classify_load_error(domain: &str, code: i64) -> Option<BrowserErrorKind> 
 /// only stops the spinner — the document that committed stays, as in a
 /// browser. Either way the load watcher, seeing `loading: false`, stands
 /// down.
-pub fn navigation_failed(app: &AppHandle, tab_id: &str, failure: LoadFailure) {
+pub fn navigation_failed(app: &AppHandle, tab_id: &str, mut failure: LoadFailure) {
     let Some(registry) = app.try_state::<BrowserRegistry>() else {
         return;
     };
+    // A remote tab's page that did not load: the tunnel knows why, the
+    // engine only that its proxy said no (see `browser::remote`).
+    if failure.provisional && failure.kind == BrowserErrorKind::Failed {
+        if let Some(state) = registry.state(tab_id) {
+            let url = failure.url.clone().filter(|u| !u.is_empty()).unwrap_or(state.requested_url);
+            if let Some(kind) = state
+                .profile
+                .as_deref()
+                .and_then(|profile| crate::browser::remote::failure_kind(app, profile, &url))
+            {
+                failure.kind = kind;
+            }
+        }
+    }
     let state = registry.update(tab_id, |tab| {
         if failure.provisional {
             tab.provisional_url = None;

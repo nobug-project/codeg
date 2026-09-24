@@ -230,6 +230,9 @@ export function WorkspaceChromeController() {
               folderId: closed.folderId ?? undefined,
               index: closed.index,
               profile: closed.profile,
+              // Said only when it was remote: otherwise the address decides,
+              // as it does when the tab comes back after a restart.
+              ...(closed.remote === true ? { remote: true } : {}),
             })
             return
           }

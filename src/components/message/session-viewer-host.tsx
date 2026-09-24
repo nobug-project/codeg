@@ -103,8 +103,9 @@ export function SessionViewerHost({ children }: { children: React.ReactNode }) {
       )}
       {request?.kind === "browser" && (
         <BrowserViewerDrawer
-          key={request.url}
+          key={`${request.remote ? "remote:" : ""}${request.url}`}
           url={request.url}
+          remote={request.remote === true}
           open={open}
           onOpenChange={setOpen}
         />

@@ -199,6 +199,71 @@ describe("browser tab persistence", () => {
     ])
   })
 
+  // A remote tab (an address of the remote codeg host) must come back as
+  // one: restored as an ordinary tab it would load this machine's port.
+  it("keeps the remote mark through a write, a read and a snapshot", () => {
+    writePersistedBrowserTabs(
+      [
+        {
+          url: "http://localhost:3000/",
+          title: "",
+          folderId: 1,
+          profile: "default",
+          remote: true,
+        },
+        {
+          url: "https://example.com/",
+          title: "",
+          folderId: 1,
+          profile: "default",
+        },
+      ],
+      "main"
+    )
+    // Written only where it is set: other records keep their old shape.
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? "{}") as {
+      tabs: Array<Record<string, unknown>>
+    }
+    expect(stored.tabs.map((t) => "remote" in t)).toEqual([true, false])
+    expect(readPersistedBrowserTabs("main").map((t) => t.remote)).toEqual([
+      true,
+      undefined,
+    ])
+
+    const snapshot = snapshotBrowserTabs(
+      [
+        browserTab("r", "http://localhost:3000/", {
+          browser: {
+            initialUrl: "http://localhost:3000/",
+            openerTabId: null,
+            profile: "default",
+            remote: true,
+          },
+        } as Partial<FileWorkspaceTab>),
+        browserTab("l", "https://example.com/"),
+      ],
+      () => null
+    )
+    expect(snapshot.map((t) => t.remote)).toEqual([true, undefined])
+  })
+
+  it("reads anything but a literal true as not remote", () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        version: BROWSER_TABS_STORAGE_VERSION,
+        tabs: [
+          { url: "http://localhost:1/", title: "", folderId: 1, remote: "yes" },
+          { url: "http://localhost:2/", title: "", folderId: 1, remote: 1 },
+        ],
+      })
+    )
+    expect(readPersistedBrowserTabs("main").map((t) => t.remote)).toEqual([
+      undefined,
+      undefined,
+    ])
+  })
+
   it("ignores a payload from another version or shape", () => {
     localStorage.setItem(KEY, "{oops")
     expect(readPersistedBrowserTabs("main")).toEqual([])
@@ -307,6 +372,17 @@ describe("browser tab persistence", () => {
           title: "A",
           folderId: 1,
           profile: "p-work",
+        },
+      ])
+    ).toBe(false)
+    expect(
+      samePersistedBrowserTabs(a, [
+        {
+          url: "https://a.example/",
+          title: "A",
+          folderId: 1,
+          profile: "default",
+          remote: true,
         },
       ])
     ).toBe(false)

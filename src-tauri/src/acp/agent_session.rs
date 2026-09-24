@@ -1,14 +1,17 @@
 //! Per-session update routing on an ACP client connection.
 //!
-//! codeg creates, loads and resumes sessions with UNTYPED requests (so it can
-//! read fields the typed responses drop — see `send_new_session_capturing_models`),
-//! and then needs the session's updates routed to it. The official runtime only
-//! routes updates for sessions it started itself: `ConnectionTo::attach_session`
-//! is crate-private since `agent-client-protocol` 2.0. This is the same routing
-//! that method installs — a dynamic handler claiming every message from the
-//! agent that names this session id, feeding an unbounded channel — minus the
-//! prompt helpers codeg never used (it sends `session/prompt` itself and reads
-//! the stop reason off the response).
+//! codeg sends `session/new`, `session/load` and `session/resume` itself —
+//! partly untyped, so it can read fields the typed responses drop (see
+//! `send_new_session_capturing_models`) — and then needs the session's updates
+//! routed to it. The official runtime only routes updates for sessions it
+//! started itself: `ConnectionTo::attach_session` is crate-private since
+//! `agent-client-protocol` 2.0. This is the same routing that method installs —
+//! a dynamic handler claiming every message from the agent that names this
+//! session id, feeding an unbounded channel — minus the prompt helpers codeg
+//! never used. codeg sends `session/prompt` itself and reads the stop reason off
+//! the response, so this channel only ever carries the agent's own messages,
+//! and it hands them out as plain [`Dispatch`]es rather than the runtime's
+//! `SessionMessage` (whose other variant, a stop reason, nothing here produces).
 //!
 //! Registering the handler is also what releases any updates the agent sent
 //! BEFORE it existed: the `Agent` role's default handler parks every message
@@ -21,7 +24,6 @@ use agent_client_protocol::schema::v1::{NewSessionResponse, SessionId, SessionMo
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     Agent, ConnectionTo, Dispatch, DynamicHandlerGuard, HandleDispatchFrom, Handled,
-    SessionMessage,
 };
 use futures::channel::mpsc;
 use futures::StreamExt;
@@ -34,7 +36,7 @@ pub struct AgentSession {
     session_id: SessionId,
     modes: Option<SessionModeState>,
     connection: ConnectionTo<Agent>,
-    update_rx: mpsc::UnboundedReceiver<SessionMessage>,
+    update_rx: mpsc::UnboundedReceiver<Dispatch>,
     _routing: DynamicHandlerGuard<Agent>,
 }
 
@@ -75,10 +77,14 @@ impl AgentSession {
         self.connection.clone()
     }
 
-    /// The next message the agent sent about this session. Always a
-    /// [`SessionMessage::SessionMessage`]: nothing here produces a stop reason,
-    /// which arrives on the `session/prompt` response instead.
-    pub async fn read_update(&mut self) -> Result<SessionMessage, agent_client_protocol::Error> {
+    /// The next message the agent sent about this session.
+    ///
+    /// Waiting here never times out on its own: the router outlives an agent
+    /// that has gone quiet (the runtime keeps its handlers for as long as any
+    /// `ConnectionTo` exists, and this session holds one). So an `Err` does not
+    /// mean one unreadable message — it means the router itself is gone, i.e.
+    /// the connection is, and a caller must stop reading rather than retry.
+    pub async fn read_update(&mut self) -> Result<Dispatch, agent_client_protocol::Error> {
         self.update_rx.next().await.ok_or_else(|| {
             agent_client_protocol::util::internal_error("session channel closed unexpectedly")
         })
@@ -89,7 +95,7 @@ impl AgentSession {
 /// session. Mirrors the runtime's own `ActiveSessionHandler`.
 struct SessionRouter {
     session_id: SessionId,
-    update_tx: mpsc::UnboundedSender<SessionMessage>,
+    update_tx: mpsc::UnboundedSender<Dispatch>,
 }
 
 impl HandleDispatchFrom<Agent> for SessionRouter {
@@ -102,7 +108,7 @@ impl HandleDispatchFrom<Agent> for SessionRouter {
             .if_dispatch_from(Agent, async |message: Dispatch| {
                 if dispatch_session_id(&message) == Some(&*self.session_id.0) {
                     self.update_tx
-                        .unbounded_send(SessionMessage::SessionMessage(message))
+                        .unbounded_send(message)
                         .map_err(agent_client_protocol::util::internal_error)?;
                     return Ok(Handled::Yes);
                 }
@@ -122,8 +128,9 @@ impl HandleDispatchFrom<Agent> for SessionRouter {
 
 /// The `sessionId` a request or notification names, if it names one as a
 /// string. A `null` (or otherwise non-string) id matches no session — the
-/// runtime's own router errors on it instead, which is why codeg claims those
-/// frames before they get this far (`DropNullSessionIdNotifications`).
+/// runtime's own router errors on it instead, which is why codeg claims the
+/// `null` ones, the shape agents actually send, before they get this far
+/// (`ClaimNullSessionIds`).
 fn dispatch_session_id(dispatch: &Dispatch) -> Option<&str> {
     let message = match dispatch {
         Dispatch::Request(message, _) | Dispatch::Notification(message) => message,
@@ -151,10 +158,7 @@ mod tests {
         )
     }
 
-    fn update_session_id(message: SessionMessage) -> String {
-        let SessionMessage::SessionMessage(dispatch) = message else {
-            panic!("the router only ever yields dispatches");
-        };
+    fn update_session_id(dispatch: Dispatch) -> String {
         dispatch_session_id(&dispatch)
             .expect("a routed update names its session")
             .to_string()

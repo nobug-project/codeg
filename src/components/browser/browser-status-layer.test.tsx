@@ -41,6 +41,10 @@ import {
   resetBrowserDownloadsForTests,
   setBrowserDownload,
 } from "@/lib/browser/browser-downloads-store"
+import {
+  resetBrowserEgressStoreForTests,
+  setBrowserEgressStatus,
+} from "@/lib/browser/browser-egress-store"
 import type { BrowserDownload, BrowserTabState } from "@/lib/browser/types"
 
 const tab = {
@@ -72,6 +76,7 @@ function renderBar() {
 beforeEach(() => {
   resetBrowserTabStoreForTests()
   resetBrowserDownloadsForTests()
+  resetBrowserEgressStoreForTests()
   mocks.actions = null
   mocks.openUrl.mockClear()
   mocks.revealItemInDir.mockClear()
@@ -139,6 +144,43 @@ describe("BrowserNoticeBar", () => {
       })
       expect(mocks.browserAgentGrant).toHaveBeenCalledWith("abc", "read")
       expect(screen.queryByText(/Sharing ended/)).not.toBeInTheDocument()
+    })
+  })
+
+  describe("a remote tab's banner", () => {
+    const remoteState = {
+      remoteHost: "box.example.com:8443",
+      profile: "remote-4",
+    } as unknown as BrowserTabState
+
+    function renderRemote() {
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <BrowserNoticeBar tab={tab} state={remoteState} />
+        </NextIntlClientProvider>
+      )
+    }
+
+    it("names the remote host the page comes through", () => {
+      renderRemote()
+      expect(
+        screen.getByText("Opened through box.example.com:8443")
+      ).toBeInTheDocument()
+    })
+
+    // The tunnel of the tab's own connection, not any other's.
+    it("says so while the tunnel is down, and stops once it is back", () => {
+      renderRemote()
+      act(() => setBrowserEgressStatus(5, { state: "down", reason: "x" }))
+      expect(screen.getByText(/Opened through/)).toBeInTheDocument()
+      act(() => setBrowserEgressStatus(4, { state: "down", reason: "x" }))
+      expect(
+        screen.getByText(/Lost the connection to box\.example\.com:8443/)
+      ).toBeInTheDocument()
+      act(() => setBrowserEgressStatus(4, { state: "ready" }))
+      expect(
+        screen.getByText("Opened through box.example.com:8443")
+      ).toBeInTheDocument()
     })
   })
 
@@ -419,6 +461,58 @@ describe("BrowserErrorPage", () => {
       screen.getByText("Could not connect to the server.")
     ).toBeInTheDocument()
     expect(screen.getByText(/a proxy may be required/)).toBeInTheDocument()
+  })
+
+  // The engine words any failed proxied connection the same ("bad URL");
+  // the tunnel's reason replaces it, and the system browser — this
+  // computer's — is not offered for an address of the remote host.
+  it("explains a remote tab's failure in the tunnel's terms", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <BrowserErrorPage
+          tab={
+            {
+              ...tab,
+              browser: { ...tab.browser, remote: true },
+            } as unknown as BrowserWorkspaceTab
+          }
+          error={{
+            kind: "remote-refused",
+            message: "bad URL",
+            url: "http://remote.localhost:3000/",
+          }}
+          url="http://remote.localhost:3000/"
+        />
+      </NextIntlClientProvider>
+    )
+    expect(
+      screen.getByText(
+        "Nothing is listening at this address on the remote host"
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("bad URL")).not.toBeInTheDocument()
+    expect(screen.getByText(/refused the connection/)).toBeInTheDocument()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+    expect(screen.queryByText("Open in system browser")).not.toBeInTheDocument()
+  })
+
+  it("does not offer the system browser for any page of a remote tab", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <BrowserErrorPage
+          tab={
+            {
+              ...tab,
+              browser: { ...tab.browser, remote: true },
+            } as unknown as BrowserWorkspaceTab
+          }
+          error={{ kind: "tls", message: "certificate expired", url: null }}
+          url="https://10.0.0.5/"
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("certificate expired")).toBeInTheDocument()
+    expect(screen.queryByText("Open in system browser")).not.toBeInTheDocument()
   })
 
   it("explains a site-rule block and does not offer the system browser", () => {

@@ -27,21 +27,29 @@ import {
   useBrowserTabDownloads,
 } from "@/lib/browser/browser-downloads-store"
 import {
+  egressIsDown,
+  useBrowserEgressStatus,
+} from "@/lib/browser/browser-egress-store"
+import {
   clearBrowserAgentActivity,
   setBrowserTabNotice,
   useBrowserTabNotice,
+  useBrowserTabState,
   type BrowserTabNotice,
 } from "@/lib/browser/browser-tab-store"
 import { displayHostPort } from "@/lib/browser/browser-url"
+import { remoteConnectionOfProfile } from "@/lib/browser/remote-host"
 import type {
   BrowserDownload,
   BrowserErrorInfo,
+  BrowserErrorKind,
   BrowserTabState,
 } from "@/lib/browser/types"
 import { browserTabBackendId } from "@/lib/file-tab-id"
 import { getAllowedExternalProtocol } from "@/lib/link-classify"
 import { openWithOsHandler } from "@/lib/link-open"
 import { openUrl, revealItemInDir } from "@/lib/platform"
+import { cn } from "@/lib/utils"
 
 function noticeText(
   t: ReturnType<typeof useTranslations<"Browser.status">>,
@@ -137,6 +145,12 @@ export function BrowserNoticeBar({
 }) {
   const t = useTranslations("Browser.status")
   const notice = useBrowserTabNotice(tab.id)
+  // A remote tab's tunnel: the banner that names the remote host turns red
+  // while it carries nothing, and back once a page's next request has opened
+  // it again.
+  const tunnelDown = egressIsDown(
+    useBrowserEgressStatus(remoteConnectionOfProfile(state?.profile))
+  )
   // Null outside the workspace providers (the viewer drawer on a full-screen
   // route); the bar then only reports the block.
   const actions = useOptionalWorkspaceActions()
@@ -167,8 +181,26 @@ export function BrowserNoticeBar({
         </div>
       ) : null}
       {state?.remoteHost ? (
-        <div className="flex h-7 items-center gap-2 border-b border-border/60 bg-muted/60 px-3 text-xs text-muted-foreground">
-          {t("remoteBanner", { host: state.remoteHost })}
+        <div
+          className={cn(
+            "flex h-7 items-center gap-2 border-b px-3 text-xs",
+            tunnelDown
+              ? "border-destructive/30 bg-destructive/10 text-foreground"
+              : "border-border/60 bg-muted/60 text-muted-foreground"
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              tunnelDown ? "bg-destructive" : "bg-emerald-500"
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate">
+            {tunnelDown
+              ? t("remoteBannerDown", { host: state.remoteHost })
+              : t("remoteBanner", { host: state.remoteHost })}
+          </span>
         </div>
       ) : null}
       {notice ? (
@@ -284,9 +316,59 @@ function errorLabel(
       return t("errorBlocked")
     case "popup-denied":
       return t("errorPopupDenied")
+    case "remote-refused":
+      return t("errorRemoteRefused")
+    case "remote-unreachable":
+      return t("errorRemoteUnreachable")
+    case "remote-not-allowed":
+      return t("errorRemoteNotAllowed")
+    case "remote-timeout":
+      return t("errorRemoteTimeout")
+    case "tunnel-down":
+      return t("errorTunnelDown")
     default:
       return t("errorFailed")
   }
+}
+
+/** What to do about a failure, in the user's language; "" when the label
+ *  says it all. */
+function errorHint(
+  t: ReturnType<typeof useTranslations<"Browser.status">>,
+  error: BrowserErrorInfo,
+  remoteHost: string | null
+): string {
+  const host = remoteHost ?? ""
+  switch (error.kind) {
+    case "failed":
+      return t("errorFailedHint")
+    case "blocked":
+      return t("errorBlockedHint")
+    case "remote-refused":
+      return t("errorRemoteRefusedHint", { host })
+    case "remote-unreachable":
+      return t("errorRemoteUnreachableHint", { host })
+    case "remote-not-allowed":
+      return t("errorRemoteNotAllowedHint", { host })
+    case "remote-timeout":
+      return t("errorRemoteTimeoutHint", { host })
+    case "tunnel-down":
+      return t("errorTunnelDownHint", { host })
+    default:
+      return ""
+  }
+}
+
+/** A failure the tunnel to the remote host explained: the engine's own text
+ *  for it is its word for any failed proxied connection, and says nothing. */
+function isRemoteFailure(kind: BrowserErrorKind): boolean {
+  return (
+    kind === "remote-refused" ||
+    kind === "remote-unreachable" ||
+    kind === "remote-not-allowed" ||
+    kind === "remote-timeout" ||
+    kind === "tunnel-down"
+  )
 }
 
 /** DOM error page shown INSTEAD of the native surface (the host hides it). */
@@ -301,18 +383,16 @@ export function BrowserErrorPage({
 }) {
   const t = useTranslations("Browser.status")
   const backendId = browserTabBackendId(tab.id)
+  const remoteHost = useBrowserTabState(tab.id)?.remoteHost ?? null
   // Platform errors carry their own text (in the system language); the
   // hint is ours, in the user's, and says what to do about it.
-  const detail = error.message
-  const hint =
-    error.kind === "failed"
-      ? t("errorFailedHint")
-      : error.kind === "blocked"
-        ? t("errorBlockedHint")
-        : ""
+  const detail = isRemoteFailure(error.kind) ? "" : error.message
+  const hint = errorHint(t, error, remoteHost)
   // A site rule means "not this host": offering the system browser would
-  // undo the rule with one click.
-  const blocked = error.kind === "blocked"
+  // undo the rule with one click. And a remote tab's address is the remote
+  // host's: the system browser would take it to this computer.
+  const noSystemBrowser =
+    error.kind === "blocked" || tab.browser.remote === true
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <ShieldAlert className="h-8 w-8 text-muted-foreground/60" />
@@ -349,7 +429,7 @@ export function BrowserErrorPage({
           <RotateCw className="h-3.5 w-3.5" />
           {t("retry")}
         </button>
-        {blocked ? null : (
+        {noSystemBrowser ? null : (
           <button
             type="button"
             className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs hover:bg-primary/8"

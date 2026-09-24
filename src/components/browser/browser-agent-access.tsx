@@ -38,6 +38,7 @@ import type {
   GrantLevel,
 } from "@/lib/browser/types"
 import { browserTabBackendId } from "@/lib/file-tab-id"
+import { isRemoteDesktopMode } from "@/lib/transport"
 import { cn } from "@/lib/utils"
 
 import { FIELD_BTN, FIELD_PILL } from "./browser-toolbar-buttons"
@@ -115,6 +116,10 @@ export function BrowserAgentShareControl({
   }
 
   if (!grant) {
+    // The agents of a remote workspace run on its host, and their browser
+    // tools reach that host's codeg — which has no browser. Sharing a page
+    // of this window would hand it to nobody who works here.
+    const remoteWindow = isRemoteDesktopMode()
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -122,12 +127,14 @@ export function BrowserAgentShareControl({
             type="button"
             className={FIELD_BTN}
             title={
-              origin
-                ? t("share", { origin: displayOrigin(origin) })
-                : t("notShareable")
+              remoteWindow
+                ? t("remoteWindow")
+                : origin
+                  ? t("share", { origin: displayOrigin(origin) })
+                  : t("notShareable")
             }
             aria-label={t("shareLabel")}
-            disabled={!backendId || !origin}
+            disabled={remoteWindow || !backendId || !origin}
           >
             <Bot className="h-3.5 w-3.5" />
           </button>

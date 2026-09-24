@@ -148,6 +148,48 @@ fn reconstructed_slash_command_fingerprint(text: &str) -> Option<String> {
     }
 }
 
+/// The first text claude-agent-acp writes into the transcript's user record
+/// for a prompt, trimmed (`promptToClaude`, as of 0.81.1): each block in
+/// order — a text block as it is; a text resource or a resource link as the
+/// link [`claude_uri_link`] renders, with a resource's body moved to a
+/// `<context>` block at the END of the record; images and blob resources as
+/// no text at all.
+fn first_transcript_text(blocks: &[crate::acp::types::PromptInputBlock]) -> Option<String> {
+    use crate::acp::types::PromptInputBlock;
+    blocks.iter().find_map(|block| {
+        let text = match block {
+            PromptInputBlock::Text { text } => text.trim().to_string(),
+            PromptInputBlock::Resource {
+                uri,
+                text: Some(_),
+                ..
+            }
+            | PromptInputBlock::ResourceLink { uri, .. } => claude_uri_link(uri),
+            PromptInputBlock::Resource { .. } | PromptInputBlock::Image { .. } => {
+                return None
+            }
+        };
+        (!text.is_empty()).then_some(text)
+    })
+}
+
+/// claude-agent-acp's `formatUriAsLink`: `[@name](uri)` for a `file://` or
+/// `zed://` uri, named after its last path segment, and the bare uri for
+/// anything else (a web page, a pasted file's `clipboard://` uri).
+fn claude_uri_link(uri: &str) -> String {
+    let named = |rest: &str| {
+        let name = rest.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(rest);
+        format!("[@{name}]({uri})")
+    };
+    if let Some(path) = uri.strip_prefix("file://") {
+        named(path)
+    } else if uri.starts_with("zed://") {
+        named(uri)
+    } else {
+        uri.to_string()
+    }
+}
+
 /// Fingerprints of prompts codeg itself sent on this connection, so the
 /// watcher can tell wire-rendered foreground turns apart from out-of-turn
 /// activity. Shared between the connection loop (writer, on every
@@ -257,21 +299,21 @@ impl PromptLedger {
     }
 
     /// Record the fingerprint of a prompt codeg is about to send: the first
-    /// text block, trimmed. Attachment/resource blocks are excluded on
-    /// purpose — the CLI may persist those differently, while the leading
-    /// text lands verbatim at the start of the transcript's user record.
+    /// text the Claude adapter writes into the transcript's user record for
+    /// it, trimmed — which is what that record's initiating text starts with.
+    ///
+    /// Almost always the prompt's first text block: the prose lands verbatim.
+    /// A prompt that opens with an attachment instead has nothing typed before
+    /// it — a page the built-in browser handed over, sent on its own — and
+    /// there the adapter writes the attachment's link first. Leaving such a
+    /// prompt unrecorded classified its own turn as out-of-turn, so the overlay
+    /// rendered the prompt and its reply a second time, under the live copy.
     pub(crate) fn record_prompt_blocks(&self, blocks: &[crate::acp::types::PromptInputBlock]) {
-        let text = blocks.iter().find_map(|b| match b {
-            crate::acp::types::PromptInputBlock::Text { text } => {
-                let t = text.trim();
-                (!t.is_empty()).then(|| t.to_string())
-            }
-            _ => None,
-        });
-        let Some(fingerprint) = text else {
-            // A prompt with no text (image-only) can't be fingerprinted; its
-            // turn will classify as out-of-turn and reconcile via refetch.
-            tracing::debug!("[bg-watch] prompt without text block — no fingerprint recorded");
+        let Some(fingerprint) = first_transcript_text(blocks) else {
+            // Nothing the adapter writes as text (an image-only prompt): its
+            // record carries no initiating text, so it cannot start a turn of
+            // its own here either.
+            tracing::debug!("[bg-watch] prompt without text — no fingerprint recorded");
             return;
         };
         // `/clear` is a CLI-local command: the adapter forwards it like any
@@ -3270,6 +3312,136 @@ mod tests {
         write_lines(&path, &[send]);
         let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).unwrap());
         assert_eq!(outstanding, 1, "resumed sub-agent re-arms the keep-alive");
+    }
+
+    /// A page the built-in browser handed over, as codeg sends it with nothing
+    /// typed: the page's block as an embedded resource, its screenshot after.
+    fn page_prompt(uri: &str) -> Vec<crate::acp::types::PromptInputBlock> {
+        use crate::acp::types::PromptInputBlock;
+        vec![
+            PromptInputBlock::Resource {
+                uri: uri.to_string(),
+                mime_type: Some("text/markdown".into()),
+                text: Some("Captured from a web page in the built-in browser.".into()),
+                blob: None,
+            },
+            PromptInputBlock::Image {
+                data: "iVBORw0KGgo=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+        ]
+    }
+
+    /// The records Claude Code writes for [`page_prompt`], shaped after a real
+    /// transcript: the address where the badge was, the picture, the block at
+    /// the end — then the picture's own `isMeta` record, then the reply.
+    fn page_prompt_records(uri: &str) -> Vec<String> {
+        vec![
+            format!(
+                r#"{{"type":"user","timestamp":"2026-09-24T00:56:17.303Z","uuid":"u-page","promptId":"p-page","message":{{"role":"user","content":[{{"type":"text","text":"{uri}"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}}},{{"type":"text","text":"\n<context ref=\"{uri}\">\nCaptured from a web page in the built-in browser.\n</context>"}}]}}}}"#
+            ),
+            r#"{"type":"user","timestamp":"2026-09-24T00:56:17.303Z","uuid":"u-meta","promptId":"p-page","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"[Image: source: /private/tmp/claude-501/shot.png]"}]}}"#
+                .to_string(),
+            assistant_text("a-page", "That is the Google doodle."),
+        ]
+    }
+
+    /// Sent with nothing typed, a page has no text block to fingerprint. Its
+    /// own turn then classified as out-of-turn, and the overlay drew the
+    /// prompt and the reply a second time under the live copy.
+    #[test]
+    fn a_page_sent_with_nothing_typed_stays_a_foreground_turn() {
+        let uri = "https://www.google.com/";
+        let records = page_prompt_records(uri);
+        let refs: Vec<&str> = records.iter().map(String::as_str).collect();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        write_lines(&path, &[]);
+        let ledger = PromptLedger::shared();
+        let mut ws = WatchState::with_file_for_test("s1", path.clone());
+        ledger.record_prompt_blocks(&page_prompt(uri));
+        write_lines(&path, &refs);
+        assert!(
+            tick_now(&mut ws, &ledger).is_none(),
+            "the prompt codeg sent must not come back as an overlay turn"
+        );
+
+        // The same records with nothing recorded are what the watcher treats
+        // as out-of-turn — which is what the fingerprint above prevents.
+        let other = tempfile::tempdir().unwrap();
+        let other_path = temp_session(&other);
+        write_lines(&other_path, &[]);
+        let empty = PromptLedger::shared();
+        let mut unrecorded = WatchState::with_file_for_test("s2", other_path.clone());
+        write_lines(&other_path, &refs);
+        let (turns, ..) = unpack(tick_now(&mut unrecorded, &empty).expect("surfaces"));
+        assert!(!turns.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_is_fingerprinted_by_the_first_text_the_adapter_writes() {
+        use crate::acp::types::PromptInputBlock;
+        let ledger = PromptLedger::shared();
+        let initiator = |text: &str| TurnInitiatorText::Verbatim(text.to_string());
+
+        // An attachment first: its link, the way `formatUriAsLink` writes it.
+        ledger.record_prompt_blocks(&page_prompt("https://example.com/a?b=1"));
+        assert!(ledger.consume_matching(&initiator(
+            "https://example.com/a?b=1\n\n<context ref=\"https://example.com/a?b=1\">"
+        )));
+        ledger.record_prompt_blocks(&[PromptInputBlock::ResourceLink {
+            uri: "file:///repo/src/app.ts".into(),
+            name: "whatever the composer called it".into(),
+            mime_type: None,
+            description: None,
+        }]);
+        assert!(ledger.consume_matching(&initiator("[@app.ts](file:///repo/src/app.ts)")));
+
+        // Typed text first is still the text, whatever follows it.
+        let mut typed = vec![PromptInputBlock::Text {
+            text: "  what is this ".into(),
+        }];
+        typed.extend(page_prompt("https://example.com/"));
+        ledger.record_prompt_blocks(&typed);
+        assert!(ledger.consume_matching(&initiator("what is this\nhttps://example.com/")));
+
+        // Nothing the adapter writes as text leaves nothing to record: an
+        // image, and a blob resource it drops.
+        ledger.record_prompt_blocks(&[
+            PromptInputBlock::Image {
+                data: "iVBORw0KGgo=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard://report.pdf-1".into(),
+                mime_type: Some("application/pdf".into()),
+                text: None,
+                blob: Some("JVBERi0=".into()),
+            },
+        ]);
+        assert!(ledger.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn claude_links_follow_format_uri_as_link() {
+        assert_eq!(claude_uri_link("https://a.test/x"), "https://a.test/x");
+        assert_eq!(
+            claude_uri_link("file:///repo/a b.ts"),
+            "[@a b.ts](file:///repo/a b.ts)"
+        );
+        // A trailing slash leaves no last segment; the whole path names it.
+        assert_eq!(claude_uri_link("file:///repo/dir/"), "[@/repo/dir/](file:///repo/dir/)");
+        assert_eq!(
+            claude_uri_link("zed://agent/thread/42"),
+            "[@42](zed://agent/thread/42)"
+        );
+        assert_eq!(
+            claude_uri_link("clipboard://notes.md-1"),
+            "clipboard://notes.md-1"
+        );
     }
 
     #[test]
